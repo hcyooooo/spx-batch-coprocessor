@@ -1,0 +1,25 @@
+# Build products
+*.o
+*.a
+*.so
+*.d
+
+# SPHINCS+ generated binaries and KAT outputs
+PQCgenKAT_sign
+PQCsignKAT_*.req
+PQCsignKAT_*.rsp
+sw/sphincsplus/ref/test/fors
+sw/sphincsplus/ref/test/spx
+sw/sphincsplus/ref/test/benchmark
+sw/sphincsplus/ref/test/profile
+sw/sphincsplus/ref/test/test_keccakx4
+sw/sphincsplus/ref/test/test_thashx4
+sw/sphincsplus/ref/test/test_wots_batch
+
+# Local editor/system files
+*~
+.DS_Store
+
+# Backups of nested repository metadata
+*.git-backup
+*.git-backup/
