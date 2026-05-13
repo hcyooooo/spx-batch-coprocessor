@@ -17,14 +17,17 @@ RTL_COP_WRAPPER := \
 RTL_CVXIF_ADAPTER := \
 	$(RTL_COP_WRAPPER) \
 	../rtl/cvxif/spx_cvxif_adapter.sv
+RTL_CVXIF_ADAPTER_COARSE := \
+	$(RTL_COP_WRAPPER) \
+	../rtl/cvxif/spx_cvxif_adapter_coarse.sv
 
 GEN := $(BUILD_DIR)/gen_thashx4_vectors
 
-.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter clean distclean
+.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse clean distclean
 
 all: test
 
-test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter
+test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse
 
 lint:
 	../scripts/lint_rtl.sh
@@ -78,6 +81,17 @@ sim-cvxif-adapter: vectors
 		-o tb_spx_cvxif_adapter \
 		$(RTL_PKG) $(RTL_CVXIF_ADAPTER) tb/tb_spx_cvxif_adapter.sv
 	./$(BUILD_DIR)/obj_spx_cvxif_adapter/tb_spx_cvxif_adapter \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
+
+sim-cvxif-adapter-coarse: vectors
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		--top-module tb_spx_cvxif_adapter_coarse \
+		-Mdir $(BUILD_DIR)/obj_spx_cvxif_adapter_coarse \
+		-o tb_spx_cvxif_adapter_coarse \
+		$(RTL_PKG) $(RTL_CVXIF_ADAPTER_COARSE) tb/tb_spx_cvxif_adapter_coarse.sv
+	./$(BUILD_DIR)/obj_spx_cvxif_adapter_coarse/tb_spx_cvxif_adapter_coarse \
 		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
 		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
 		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
