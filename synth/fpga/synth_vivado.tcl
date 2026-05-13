@@ -29,6 +29,7 @@ set rtl_files [list \
 ]
 
 puts "INFO: Synthesizing standalone accelerator top=$top part=$part clock=${clock_period_ns}ns"
+puts "INFO: Vivado flow mode: out_of_context accelerator-only implementation"
 puts "INFO: Repository root: $repo_root"
 puts "INFO: Build directory: $build_dir"
 
@@ -38,7 +39,7 @@ close $xdc_fp
 
 read_verilog -sv $rtl_files
 read_xdc $xdc_file
-synth_design -top $top -part $part -flatten_hierarchy rebuilt
+synth_design -top $top -part $part -flatten_hierarchy rebuilt -mode out_of_context
 
 opt_design
 place_design

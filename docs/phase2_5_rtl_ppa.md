@@ -142,17 +142,86 @@ synth/fpga/build/spx_keccakx4_core/reports/timing_summary.rpt
 synth/fpga/build/spx_keccakx4_core/reports/ppa_summary.txt
 ```
 
+The Vivado flow uses out-of-context accelerator-only implementation. This keeps
+the standalone wide RTL ports from being treated as package I/O pins while still
+running synthesis, optimization, placement, routing, utilization reporting, and
+timing reporting for the accelerator logic.
+
 ## Accelerator-Only PPA
 
-Vivado PPA is pending a Windows-host run.
+Vivado PPA was run on the Windows host on 2026-05-13 with Vivado 2020.2 and a
+10.0 ns target clock.
 
-| Top | Part | LUT / logic | FF | BRAM | DSP | Estimated Fmax | Status |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `spx_thashx4_core` | `xc7a35tcpg236-1` default | pending | pending | pending | pending | pending | Vivado host run needed |
-| `spx_keccakx4_core` | `xc7a35tcpg236-1` default | pending | pending | pending | pending | pending | Optional Vivado host run needed |
+| Top | Part | LUT | FF | BRAM | DSP | WNS | Fmax | Status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `spx_thashx4_core` | `xc7a35tcpg236-1` | 11797 | 9105 | 0 | 0 | 1.422 ns | 116.58 MHz | PASS |
+| `spx_keccakx4_core` | `xc7a35tcpg236-1` | 13578 | 6415 | 0 | 0 | 1.187 ns | 113.47 MHz | PASS optional |
 
 The Vivado TCL emits `ppa_summary.txt` with routed WNS, critical path delay,
 and estimated Fmax. LUT/FF/BRAM/DSP are in `utilization.rpt`.
+
+## Vivado Host Run Result
+
+Run environment:
+
+- Date: 2026-05-13
+- Host shell: Windows PowerShell
+- Vivado: `D:\Vivado\2020.2\bin\vivado.bat`, Vivado v2020.2 64-bit
+- FPGA part: `xc7a35tcpg236-1`
+- Target clock period: 10.0 ns
+- Flow mode: out-of-context accelerator-only implementation
+
+Commands:
+
+```bat
+cd synth\fpga
+run_vivado.bat spx_thashx4_core xc7a35tcpg236-1 10.0
+run_vivado.bat spx_keccakx4_core xc7a35tcpg236-1 10.0
+```
+
+Result:
+
+- `spx_thashx4_core`: PASS, timing met with WNS = 1.422 ns.
+- `spx_keccakx4_core`: PASS optional, timing met with WNS = 1.187 ns.
+- A first non-OOC full package implementation attempt for `spx_thashx4_core`
+  failed at I/O placement because the bare standalone top exposes 2694 ports,
+  while the selected `cpg236` package has 106 user I/O pins. This was a flow
+  issue for standalone accelerator PPA, not an RTL semantic issue. The complete
+  failure log is saved at
+  `synth/fpga/build/spx_thashx4_core/reports/vivado_io_place_failure.log`.
+
+Report paths:
+
+```text
+synth/fpga/build/spx_thashx4_core/reports/ppa_summary.txt
+synth/fpga/build/spx_thashx4_core/reports/utilization.rpt
+synth/fpga/build/spx_thashx4_core/reports/utilization_hier.rpt
+synth/fpga/build/spx_thashx4_core/reports/timing_summary.rpt
+
+synth/fpga/build/spx_keccakx4_core/reports/ppa_summary.txt
+synth/fpga/build/spx_keccakx4_core/reports/utilization.rpt
+synth/fpga/build/spx_keccakx4_core/reports/utilization_hier.rpt
+synth/fpga/build/spx_keccakx4_core/reports/timing_summary.rpt
+```
+
+Key PPA data:
+
+| Top | Critical path delay | Estimated Fmax | Notes |
+| --- | ---: | ---: | --- |
+| `spx_thashx4_core` | 8.578 ns | 116.58 MHz | Wrapper plus optimized Keccak datapath |
+| `spx_keccakx4_core` | 8.813 ns | 113.47 MHz | Primitive-only comparison top |
+
+Throughput estimate for `spx_thashx4_core`:
+
+```text
+cycles_per_thash_equiv = 27 / 4 = 6.75 cycles
+thashx4_ops_per_second = 116.58e6 / 27 = 4.32 M ops/s
+equivalent_scalar_thash_per_second = 116.58e6 * 4 / 27 = 17.27 M thash/s
+```
+
+The OOC timing reports include Vivado warnings about missing `HD.CLK_SRC` and
+`HD.PARTPIN_LOCS`, so these numbers are suitable for accelerator-only Phase 2.5
+comparison but should be rerun after a real integration wrapper exists.
 
 ## Current Limits
 
@@ -161,11 +230,13 @@ and estimated Fmax. LUT/FF/BRAM/DSP are in `utilization.rpt`.
 - Single-rate-block SHAKE256 absorb only.
 - One Keccak round per cycle, no area/frequency optimization.
 - No CPU, SoC, CV-X-IF, custom instruction, or bus integration.
-- PPA numbers are not final until Vivado is run on the target FPGA part.
+- OOC PPA numbers are not final system signoff numbers; rerun after the Phase 3
+  wrapper and target integration constraints exist.
 
 ## Phase 3 Recommendation
 
-Functionally, the standalone accelerator is ready for Phase 3 planning:
-correctness passes, lint is clean, and latency is deterministic. The remaining
-gate before CV-X-IF integration is to run the Vivado accelerator-only flow on
-the intended FPGA part and confirm the resource/Fmax tradeoff is acceptable.
+Functionally and for accelerator-only PPA, the standalone accelerator is ready
+for Phase 3 planning: correctness passes, lint is clean, latency is
+deterministic, and the OOC Vivado run meets a 10.0 ns target clock on the
+default `xc7a35tcpg236-1` part. Phase 3 should still rerun PPA after the real
+wrapper/interface constraints are introduced.
