@@ -15,6 +15,11 @@ sw/sphincsplus/ref/test/profile
 sw/sphincsplus/ref/test/test_keccakx4
 sw/sphincsplus/ref/test/test_thashx4
 sw/sphincsplus/ref/test/test_wots_batch
+sim/build/
+synth/fpga/build/
+synth/fpga/.Xil/
+synth/fpga/vivado*.jou
+synth/fpga/vivado*.log
 
 # Local editor/system files
 *~

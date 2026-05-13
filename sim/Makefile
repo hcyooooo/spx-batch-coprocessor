@@ -1,0 +1,64 @@
+CC ?= gcc
+VERILATOR ?= verilator
+
+BUILD_DIR := build
+VECTOR_DIR := vectors
+
+RTL_PKG := ../rtl/common/spx_thashx4_pkg.sv
+RTL_KECCAK := \
+	../rtl/core/spx_keccak_round.sv \
+	../rtl/core/spx_keccakx4_core.sv
+RTL_THASH := \
+	$(RTL_KECCAK) \
+	../rtl/core/spx_thashx4_core.sv
+
+GEN := $(BUILD_DIR)/gen_thashx4_vectors
+
+.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 clean distclean
+
+all: test
+
+test: sim-keccakx4 sim-thashx4
+
+lint:
+	../scripts/lint_rtl.sh
+
+$(BUILD_DIR):
+	mkdir -p $@
+
+$(GEN): gen_thashx4_vectors.c ../sw/spx_model/keccakx4.c ../sw/spx_model/keccakx4.h | $(BUILD_DIR)
+	$(CC) -std=c99 -Wall -Wextra -O2 -I../sw/spx_model \
+		-o $@ gen_thashx4_vectors.c ../sw/spx_model/keccakx4.c
+
+vectors: $(GEN)
+	mkdir -p $(VECTOR_DIR)
+	./$(GEN) $(VECTOR_DIR)
+
+sim-keccakx4: vectors
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		--top-module tb_keccakx4_core \
+		-Mdir $(BUILD_DIR)/obj_keccakx4_core \
+		-o tb_keccakx4_core \
+		$(RTL_PKG) $(RTL_KECCAK) tb/tb_keccakx4_core.sv
+	./$(BUILD_DIR)/obj_keccakx4_core/tb_keccakx4_core \
+		+VECTORS=$(VECTOR_DIR)/keccakx4_vectors.hex
+
+sim-thashx4: vectors
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		--top-module tb_thashx4_core \
+		-Mdir $(BUILD_DIR)/obj_thashx4_core \
+		-o tb_thashx4_core \
+		$(RTL_PKG) $(RTL_THASH) tb/tb_thashx4_core.sv
+	./$(BUILD_DIR)/obj_thashx4_core/tb_thashx4_core \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
+
+clean:
+	rm -rf $(BUILD_DIR)
+
+distclean: clean
+	rm -f $(VECTOR_DIR)/keccakx4_vectors.hex
+	rm -f $(VECTOR_DIR)/thashx4_inblocks1.hex
+	rm -f $(VECTOR_DIR)/thashx4_inblocks2.hex
+	rm -f $(VECTOR_DIR)/thashx4_expected.hex
