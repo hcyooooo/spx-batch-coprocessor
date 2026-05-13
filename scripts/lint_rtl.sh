@@ -66,4 +66,13 @@ for width in 1 2 4; do
     "${REPO_ROOT}/rtl/cvxif/spx_descriptor_adapter.sv"
 done
 
+echo "Linting standalone SPHINCS+ CV-X-IF descriptor-control adapter with ${VERILATOR}"
+"${VERILATOR}" \
+  -sv \
+  --lint-only \
+  --timing \
+  --Wall \
+  --top-module spx_cvxif_desc_adapter \
+  "${REPO_ROOT}/rtl/cvxif/spx_cvxif_desc_adapter.sv"
+
 echo "PASS rtl lint"
