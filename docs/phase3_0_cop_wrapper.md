@@ -219,11 +219,44 @@ PPA status:
 | Top | Part | LUT | FF | Fmax | Status |
 | --- | --- | ---: | ---: | ---: | --- |
 | `spx_thashx4_core` | `xc7a35tcpg236-1` | 11797 | 9105 | 116.58 MHz | Phase 2.5 baseline |
-| `spx_cop_wrapper` | `xc7a35tcpg236-1` | TBD | TBD | TBD | Flow target added; Vivado not available in this Linux environment |
+| `spx_cop_wrapper` | `xc7a35tcpg236-1` | 13473 | 11835 | 116.93 MHz | Vivado host PASS |
 
-The current Linux environment used for this update does not have `vivado` in
-`PATH`, so wrapper LUT/FF/Fmax must be filled in after running the target on the
-Vivado host.
+## Vivado Host PPA Result
+
+Run on the Windows Vivado host on 2026-05-13:
+
+```bat
+cd synth\fpga
+run_vivado.bat spx_cop_wrapper xc7a35tcpg236-1 10.0
+```
+
+Vivado result:
+
+| Item | Value |
+| --- | ---: |
+| FPGA part | `xc7a35tcpg236-1` |
+| Target clock | 10.0 ns / 100.0 MHz |
+| LUT | 13473 |
+| FF | 11835 |
+| BRAM | 0 |
+| DSP | 0 |
+| WNS | +1.448 ns |
+| Critical path delay | 8.552 ns |
+| Estimated Fmax | 116.93 MHz |
+
+Compared with the Phase 2.5 `spx_thashx4_core` baseline:
+
+| Metric | `spx_thashx4_core` | `spx_cop_wrapper` | Delta |
+| --- | ---: | ---: | ---: |
+| LUT | 11797 | 13473 | +1676 (+14.21%) |
+| FF | 9105 | 11835 | +2730 (+29.98%) |
+| Fmax | 116.58 MHz | 116.93 MHz | +0.35 MHz (+0.30%) |
+
+Timing met the 10.0 ns target with positive WNS. The wrapper adds the expected
+register file and command/status control logic, but it does not clearly reduce
+Fmax versus the Phase 2.5 core baseline. The standalone wrapper is therefore a
+reasonable handoff point for Phase 3.1 CV-X-IF adapter work, while keeping the
+adapter limited to protocol translation above this command interface.
 
 ## CV-X-IF Mapping Notes
 
