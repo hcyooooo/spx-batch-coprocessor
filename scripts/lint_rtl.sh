@@ -53,4 +53,17 @@ echo "Linting standalone SPHINCS+ coarse CV-X-IF-style adapter with ${VERILATOR}
   "${REPO_ROOT}/rtl/wrapper/spx_cop_wrapper.sv" \
   "${REPO_ROOT}/rtl/cvxif/spx_cvxif_adapter_coarse.sv"
 
+echo "Linting standalone SPHINCS+ descriptor adapter with ${VERILATOR}"
+for width in 1 2 4; do
+  "${VERILATOR}" \
+    -sv \
+    --lint-only \
+    --timing \
+    --Wall \
+    -GMEM_WORDS_PER_CYCLE="${width}" \
+    --top-module spx_descriptor_adapter \
+    "${RTL_FILES[@]}" \
+    "${REPO_ROOT}/rtl/cvxif/spx_descriptor_adapter.sv"
+done
+
 echo "PASS rtl lint"
