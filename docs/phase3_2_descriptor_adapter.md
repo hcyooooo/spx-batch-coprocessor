@@ -76,6 +76,7 @@ mem_we
 mem_addr
 mem_wdata
 mem_rdata
+mem_error
 ```
 
 `MEM_WORDS_PER_CYCLE` selects the beat width:
@@ -90,6 +91,8 @@ The standalone testbench memory model is zero-wait-state:
 
 - reads sample `mem_rdata` in the cycle where `mem_valid && mem_ready && !mem_we`;
 - writes commit `mem_wdata` in the cycle where `mem_valid && mem_ready && mem_we`;
+- samples `mem_error` on accepted beats to model standalone read/write response
+  errors;
 - all transfers are whole beats.
 
 This is intentionally not AXI/AHB/APB. It is only a compact RTL prototype for
@@ -114,7 +117,9 @@ IDLE
 ```
 
 Error cases detected during descriptor parsing skip the core and go directly to
-`WRITE_STATUS`. The current error checks are bad config and bad alignment.
+`WRITE_STATUS`. Current checks cover bad config and bad alignment. Phase 3.5B
+also models accepted read/write beats with `mem_error=1` as memory response
+errors.
 
 ## Test Result
 

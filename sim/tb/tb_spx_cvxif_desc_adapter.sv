@@ -31,6 +31,18 @@ module tb_spx_cvxif_desc_adapter;
   localparam int STATUS_BUSY_BIT          = 0;
   localparam int STATUS_DONE_BIT          = 1;
   localparam int STATUS_ERROR_BIT         = 2;
+  localparam int STATUS_ERROR_CODE_LSB    = 4;
+
+  localparam logic [3:0] ERR_NONE       = 4'h0;
+  localparam logic [3:0] ERR_BAD_CONFIG = 4'h1;
+  localparam logic [3:0] ERR_BAD_ALIGN  = 4'h2;
+  localparam logic [3:0] ERR_MEM_READ   = 4'h3;
+  localparam logic [3:0] ERR_MEM_WRITE  = 4'h4;
+
+  localparam int MEM_ERR_NONE       = 0;
+  localparam int MEM_ERR_READ_BUS   = 1;
+  localparam int MEM_ERR_READ_DATA  = 2;
+  localparam int MEM_ERR_WRITE_RESP = 3;
 
   localparam int METRIC_INSTR_COUNT       = 0;
   localparam int METRIC_STATUS_POLLS      = 1;
@@ -66,6 +78,7 @@ module tb_spx_cvxif_desc_adapter;
   logic [MEM_ADDR_WIDTH-1:0] mem_addr;
   logic [MEM_DATA_WIDTH-1:0] mem_wdata;
   logic [MEM_DATA_WIDTH-1:0] mem_rdata;
+  logic mem_error;
 
   logic [31:0] perf_load_cycles;
   logic [31:0] perf_core_cycles;
@@ -79,6 +92,19 @@ module tb_spx_cvxif_desc_adapter;
   int metric_max [0:1][0:METRIC_COUNT-1];
   longint metric_sum [0:1][0:METRIC_COUNT-1];
   int metric_cases [0:1];
+
+  int mem_model_read_wait_cycles = 0;
+  int mem_model_write_wait_cycles = 0;
+  int mem_model_random_ready_pct = 100;
+  int mem_model_error_kind = MEM_ERR_NONE;
+  int mem_model_error_read_index = 0;
+  int mem_model_error_write_index = 0;
+  logic [31:0] mem_model_seed = 32'h35a0_0001;
+  logic [31:0] mem_rng_q;
+  logic mem_pending_q;
+  int mem_wait_remaining_q;
+  int mem_read_accept_count_q;
+  int mem_write_accept_count_q;
 
   spx_cvxif_desc_adapter u_cvxif_desc_adapter (
       .clk(clk),
@@ -116,6 +142,7 @@ module tb_spx_cvxif_desc_adapter;
       .mem_addr(mem_addr),
       .mem_wdata(mem_wdata),
       .mem_rdata(mem_rdata),
+      .mem_error(mem_error),
       .perf_load_cycles(perf_load_cycles),
       .perf_core_cycles(perf_core_cycles),
       .perf_store_cycles(perf_store_cycles),
@@ -129,7 +156,103 @@ module tb_spx_cvxif_desc_adapter;
     forever #5 clk = ~clk;
   end
 
-  assign mem_ready = 1'b1;
+  function automatic logic [31:0] xorshift32(input logic [31:0] value);
+    logic [31:0] next_value;
+    begin
+      next_value = value;
+      next_value ^= (next_value << 13);
+      next_value ^= (next_value >> 17);
+      next_value ^= (next_value << 5);
+      xorshift32 = (next_value == 32'd0) ? 32'h1ace_b00c : next_value;
+    end
+  endfunction
+
+  task automatic configure_memory_model(
+      input int read_wait_cycles,
+      input int write_wait_cycles,
+      input int random_ready_pct,
+      input int error_kind,
+      input int error_read_index,
+      input int error_write_index,
+      input logic [31:0] seed
+  );
+    begin
+      mem_model_read_wait_cycles  = read_wait_cycles;
+      mem_model_write_wait_cycles = write_wait_cycles;
+      mem_model_random_ready_pct  = random_ready_pct;
+      mem_model_error_kind        = error_kind;
+      mem_model_error_read_index  = error_read_index;
+      mem_model_error_write_index = error_write_index;
+      mem_model_seed              = seed;
+    end
+  endtask
+
+  always_comb begin
+    int wait_cfg;
+    bit wait_satisfied;
+    bit random_satisfied;
+
+    wait_cfg = mem_we ? mem_model_write_wait_cycles : mem_model_read_wait_cycles;
+    wait_satisfied = mem_pending_q ? (mem_wait_remaining_q == 0) : (wait_cfg == 0);
+
+    if (mem_model_random_ready_pct >= 100) begin
+      random_satisfied = 1'b1;
+    end else if (mem_model_random_ready_pct <= 0) begin
+      random_satisfied = 1'b0;
+    end else begin
+      random_satisfied = (int'(mem_rng_q % 100) < mem_model_random_ready_pct);
+    end
+
+    mem_ready = mem_valid && wait_satisfied && random_satisfied;
+  end
+
+  always_comb begin
+    mem_error = 1'b0;
+    if (mem_valid && mem_ready) begin
+      if (!mem_we &&
+          ((mem_model_error_kind == MEM_ERR_READ_BUS) ||
+           (mem_model_error_kind == MEM_ERR_READ_DATA)) &&
+          (mem_read_accept_count_q == mem_model_error_read_index)) begin
+        mem_error = 1'b1;
+      end else if (mem_we &&
+                   (mem_model_error_kind == MEM_ERR_WRITE_RESP) &&
+                   (mem_write_accept_count_q == mem_model_error_write_index)) begin
+        mem_error = 1'b1;
+      end
+    end
+  end
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      mem_rng_q                <= mem_model_seed;
+      mem_pending_q            <= 1'b0;
+      mem_wait_remaining_q     <= 0;
+      mem_read_accept_count_q  <= 0;
+      mem_write_accept_count_q <= 0;
+    end else begin
+      int wait_cfg;
+      wait_cfg = mem_we ? mem_model_write_wait_cycles : mem_model_read_wait_cycles;
+      mem_rng_q <= xorshift32(mem_rng_q);
+
+      if (!mem_valid) begin
+        mem_pending_q        <= 1'b0;
+        mem_wait_remaining_q <= 0;
+      end else if (mem_ready) begin
+        mem_pending_q        <= 1'b0;
+        mem_wait_remaining_q <= 0;
+        if (mem_we) begin
+          mem_write_accept_count_q <= mem_write_accept_count_q + 1;
+        end else begin
+          mem_read_accept_count_q <= mem_read_accept_count_q + 1;
+        end
+      end else if (!mem_pending_q) begin
+        mem_pending_q <= 1'b1;
+        mem_wait_remaining_q <= (wait_cfg > 0) ? (wait_cfg - 1) : 0;
+      end else if (mem_wait_remaining_q > 0) begin
+        mem_wait_remaining_q <= mem_wait_remaining_q - 1;
+      end
+    end
+  end
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -143,15 +266,23 @@ module tb_spx_cvxif_desc_adapter;
     mem_rdata = '0;
     for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
       int unsigned word_addr;
+      logic [31:0] read_word;
       word_addr = int'(mem_addr[MEM_ADDR_WIDTH-1:2]) + lane;
+      read_word = 32'd0;
       if (mem_valid && !mem_we && (word_addr < MEM_WORDS)) begin
-        mem_rdata[32 * lane +: 32] = mem[word_addr];
+        read_word = mem[word_addr];
+        if ((mem_model_error_kind == MEM_ERR_READ_DATA) &&
+            (mem_read_accept_count_q == mem_model_error_read_index) &&
+            (lane == 0)) begin
+          read_word ^= 32'hbad0_0bad;
+        end
+        mem_rdata[32 * lane +: 32] = read_word;
       end
     end
   end
 
   always_ff @(posedge clk) begin
-    if (mem_valid && mem_ready && mem_we) begin
+    if (mem_valid && mem_ready && mem_we && !mem_error) begin
       for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
         int unsigned word_addr;
         word_addr = int'(mem_addr[MEM_ADDR_WIDTH-1:2]) + lane;
@@ -380,7 +511,7 @@ module tb_spx_cvxif_desc_adapter;
       start_cycle = cycle_q;
 
       timeout_polls = 0;
-      while (!observed_status[STATUS_DONE_BIT] && timeout_polls < 300) begin
+      while (!observed_status[STATUS_DONE_BIT] && timeout_polls < 2000) begin
         expect_legal_instr(INSTR_SPX_STATUS, 32'd0, observed_status);
         instruction_count++;
         status_poll_count++;
@@ -588,6 +719,362 @@ module tb_spx_cvxif_desc_adapter;
     end
   endtask
 
+  task automatic run_wait_success_mode(
+      input string mode_name,
+      input int read_wait_cycles,
+      input int write_wait_cycles,
+      input int random_ready_pct,
+      input logic [31:0] seed,
+      input string input_path0,
+      input string input_path1,
+      input string expected_path
+  );
+    int input_fd;
+    int expected_fd;
+    int rc;
+    int num_cases;
+    int expected_total;
+    int expected_case_id;
+    int exp_inblocks;
+    int errors;
+    int instruction_count;
+    int status_poll_count;
+    int descriptor_total_cycles;
+    int load_cycles;
+    int core_cycles;
+    int store_cycles;
+    int total_cycles;
+    real active_share;
+    string selected_input_path;
+    logic [127:0] pub_seed;
+    logic [255:0] addr0;
+    logic [255:0] addr1;
+    logic [255:0] addr2;
+    logic [255:0] addr3;
+    logic [255:0] in0;
+    logic [255:0] in1;
+    logic [255:0] in2;
+    logic [255:0] in3;
+    logic [127:0] exp0;
+    logic [127:0] exp1;
+    logic [127:0] exp2;
+    logic [127:0] exp3;
+    logic [127:0] got0;
+    logic [127:0] got1;
+    logic [127:0] got2;
+    logic [127:0] got3;
+    begin
+      configure_memory_model(read_wait_cycles, write_wait_cycles, random_ready_pct,
+                             MEM_ERR_NONE, 0, 0, seed);
+      reset_dut();
+
+      expected_fd = $fopen(expected_path, "r");
+      if (expected_fd == 0) begin
+        $fatal(1, "failed to open %s", expected_path);
+      end
+      rc = $fscanf(expected_fd, "%d", expected_total);
+      if (rc != 1) begin
+        $fatal(1, "failed to read expected count from %s", expected_path);
+      end
+
+      errors = 0;
+      expected_case_id = 0;
+      $display("PHASE35B_PERF_TABLE mode=%s read_wait=%0d write_wait=%0d random_ready_pct=%0d",
+               mode_name, read_wait_cycles, write_wait_cycles, random_ready_pct);
+      $display("mode  inblocks  total_cycles  memory_load_cycles  core_cycles  memory_store_cycles  active_share  status_poll_count  instruction_count  error_count");
+
+      for (int phase = 0; phase < 2; phase++) begin
+        if (phase == 0) begin
+          selected_input_path = input_path0;
+        end else begin
+          selected_input_path = input_path1;
+        end
+
+        input_fd = $fopen(selected_input_path, "r");
+        if (input_fd == 0) begin
+          $fatal(1, "failed to open %s", selected_input_path);
+        end
+        rc = $fscanf(input_fd, "%d", num_cases);
+        if (rc != 1) begin
+          $fatal(1, "failed to read case count from %s", selected_input_path);
+        end
+        rc = $fscanf(input_fd, "%h %h %h %h %h %h %h %h %h",
+                     pub_seed, addr0, addr1, addr2, addr3,
+                     in0, in1, in2, in3);
+        if (rc != 9) begin
+          $fatal(1, "failed to read descriptor input case 0 from %s",
+                 selected_input_path);
+        end
+        $fclose(input_fd);
+
+        rc = $fscanf(expected_fd, "%d %h %h %h %h",
+                     exp_inblocks, exp0, exp1, exp2, exp3);
+        if (rc != 5) begin
+          $fatal(1, "failed to read descriptor expected case %0d from %s",
+                 expected_case_id, expected_path);
+        end
+        if (exp_inblocks != (phase + 1)) begin
+          $fatal(1, "expected file inblocks mismatch at case %0d: expected %0d got %0d",
+                 expected_case_id, phase + 1, exp_inblocks);
+        end
+
+        run_cvxif_descriptor_case(expected_case_id, phase + 1, 1'b0,
+                                  pub_seed, addr0, addr1, addr2, addr3,
+                                  in0, in1, in2, in3,
+                                  got0, got1, got2, got3,
+                                  instruction_count, status_poll_count,
+                                  descriptor_total_cycles, load_cycles,
+                                  core_cycles, store_cycles, total_cycles);
+        compare_outputs(phase + 1, 0, exp0, exp1, exp2, exp3,
+                        got0, got1, got2, got3, errors);
+
+        active_share = (100.0 * core_cycles) / total_cycles;
+        $display("%s %9d %13d %19d %12d %20d %11.1f%% %18d %18d %12d",
+                 mode_name, phase + 1, total_cycles, load_cycles, core_cycles,
+                 store_cycles, active_share, status_poll_count,
+                 instruction_count, errors);
+
+        expected_case_id++;
+        for (int skip_case = 1; skip_case < num_cases; skip_case++) begin
+          rc = $fscanf(expected_fd, "%d %h %h %h %h",
+                       exp_inblocks, exp0, exp1, exp2, exp3);
+          if (rc != 5) begin
+            $fatal(1, "failed to skip descriptor expected case %0d from %s",
+                   expected_case_id, expected_path);
+          end
+          expected_case_id++;
+        end
+      end
+
+      $fclose(expected_fd);
+      if (errors != 0) begin
+        $fatal(1, "FAIL wait mode %s mismatches=%0d", mode_name, errors);
+      end
+    end
+  endtask
+
+  task automatic expect_cvxif_descriptor_error(
+      input string test_name,
+      input logic [31:0] descriptor_start_addr,
+      input logic [31:0] descriptor_status_addr,
+      input logic [3:0] expected_error_code
+  );
+    int timeout_polls;
+    int instruction_count;
+    int status_poll_count;
+    logic [31:0] resp;
+    logic [31:0] observed_status;
+    logic [31:0] descriptor_status_word;
+    begin
+      instruction_count = 0;
+      status_poll_count = 0;
+      observed_status = 32'd0;
+
+      expect_legal_instr(INSTR_SPX_SET_DESC, descriptor_start_addr, resp);
+      instruction_count++;
+      expect_legal_instr(INSTR_SPX_START, 32'd0, resp);
+      instruction_count++;
+      if (!resp[STATUS_BUSY_BIT]) begin
+        $fatal(1, "%s START response did not report busy", test_name);
+      end
+
+      timeout_polls = 0;
+      while (!observed_status[STATUS_DONE_BIT] && timeout_polls < 2000) begin
+        expect_legal_instr(INSTR_SPX_STATUS, 32'd0, observed_status);
+        instruction_count++;
+        status_poll_count++;
+        timeout_polls++;
+      end
+
+      if (!observed_status[STATUS_DONE_BIT]) begin
+        $fatal(1, "%s timed out", test_name);
+      end
+      if (!observed_status[STATUS_ERROR_BIT]) begin
+        $fatal(1, "%s completed without CV-X-IF error status=0x%08x",
+               test_name, observed_status);
+      end
+      if (observed_status[STATUS_ERROR_CODE_LSB +: 4] != expected_error_code) begin
+        $fatal(1, "%s CV-X-IF error_code mismatch expected=0x%0x got=0x%0x status=0x%08x",
+               test_name, expected_error_code,
+               observed_status[STATUS_ERROR_CODE_LSB +: 4], observed_status);
+      end
+
+      descriptor_status_word = read_mem_word(descriptor_status_addr, 0);
+      if (!descriptor_status_word[STATUS_DONE_BIT] ||
+          !descriptor_status_word[STATUS_ERROR_BIT] ||
+          (descriptor_status_word[STATUS_ERROR_CODE_LSB +: 4] != expected_error_code)) begin
+        $fatal(1, "%s descriptor status mismatch expected_code=0x%0x desc_status=0x%08x",
+               test_name, expected_error_code, descriptor_status_word);
+      end
+
+      expect_legal_instr(INSTR_SPX_WAIT, 32'd0, resp);
+      if (!resp[STATUS_DONE_BIT] || !resp[STATUS_ERROR_BIT] ||
+          (resp[STATUS_ERROR_CODE_LSB +: 4] != expected_error_code)) begin
+        $fatal(1, "%s WAIT helper status mismatch status=0x%08x", test_name, resp);
+      end
+
+      expect_legal_instr(INSTR_SPX_CLEAR, 32'd0, resp);
+      instruction_count++;
+      $display("PHASE35B_ERROR_PASS %s error_code=0x%0x status_polls=%0d instruction_count=%0d desc_status=0x%08x",
+               test_name, expected_error_code, status_poll_count, instruction_count,
+               descriptor_status_word);
+    end
+  endtask
+
+  task automatic setup_zero_valid_case(input int inblocks);
+    logic [127:0] pub_seed;
+    logic [255:0] addr0;
+    logic [255:0] addr1;
+    logic [255:0] addr2;
+    logic [255:0] addr3;
+    logic [255:0] in0;
+    logic [255:0] in1;
+    logic [255:0] in2;
+    logic [255:0] in3;
+    begin
+      pub_seed = 128'h0011_2233_4455_6677_8899_aabb_ccdd_eeff;
+      addr0 = 256'h0102_0304_0506_0708_1112_1314_1516_1718_2122_2324_2526_2728_3132_3334_3536_3738;
+      addr1 = 256'h4142_4344_4546_4748_5152_5354_5556_5758_6162_6364_6566_6768_7172_7374_7576_7778;
+      addr2 = 256'h8182_8384_8586_8788_9192_9394_9596_9798_a1a2_a3a4_a5a6_a7a8_b1b2_b3b4_b5b6_b7b8;
+      addr3 = 256'hc1c2_c3c4_c5c6_c7c8_d1d2_d3d4_d5d6_d7d8_e1e2_e3e4_e5e6_e7e8_f1f2_f3f4_f5f6_f7f8;
+      in0 = 256'h0010_2030_4050_6070_8090_a0b0_c0d0_e0f0_1020_3040_5060_7080_90a0_b0c0_d0e0_f001;
+      in1 = 256'h1121_3141_5161_7181_91a1_b1c1_d1e1_f102_2131_4151_6171_8191_a1b1_c1d1_e1f1_0212;
+      in2 = 256'h2232_4252_6272_8292_a2b2_c2d2_e2f2_0313_3242_5262_7282_92a2_b2c2_d2e2_f203_1323;
+      in3 = 256'h3343_5363_7383_93a3_b3c3_d3e3_f304_1424_4353_6373_8393_a3b3_c3d3_e3f3_0414_2434;
+      setup_memory_case(inblocks, 1'b0, pub_seed, addr0, addr1, addr2, addr3,
+                        in0, in1, in2, in3);
+    end
+  endtask
+
+  task automatic run_phase35b_error_suite;
+    logic [31:0] resp;
+    begin
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0001);
+      reset_dut();
+      setup_zero_valid_case(1);
+      expect_cvxif_descriptor_error("descriptor_addr_unaligned",
+                                    DESC_BASE[31:0] + 32'd4,
+                                    DESC_BASE[31:0] + 32'd4,
+                                    ERR_BAD_ALIGN);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0002);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_PUB_SEED_PTR_WORD, PUB_SEED_BASE[31:0] + 32'd4);
+      expect_cvxif_descriptor_error("pub_seed_ptr_unaligned", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_BAD_ALIGN);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0003);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_ADDR_BASE_WORD, ADDR_BASE[31:0] + 32'd4);
+      expect_cvxif_descriptor_error("addr_base_ptr_unaligned", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_BAD_ALIGN);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0004);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_INPUT_BASE_WORD, INPUT_BASE[31:0] + 32'd4);
+      expect_cvxif_descriptor_error("input_base_ptr_unaligned", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_BAD_ALIGN);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0005);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_OUTPUT_BASE_WORD, OUTPUT_BASE[31:0] + 32'd4);
+      expect_cvxif_descriptor_error("output_base_ptr_unaligned", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_BAD_ALIGN);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0010);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_CONFIG_WORD, 32'h0000_0140);
+      expect_cvxif_descriptor_error("invalid_inblocks_0", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_BAD_CONFIG);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0011);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_CONFIG_WORD, 32'h0000_0143);
+      expect_cvxif_descriptor_error("invalid_inblocks_3", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_BAD_CONFIG);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0012);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_CONFIG_WORD, 32'h0000_0121);
+      expect_cvxif_descriptor_error("invalid_lanes", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_BAD_CONFIG);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0013);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_CONFIG_WORD, 32'h0000_0241);
+      expect_cvxif_descriptor_error("invalid_variant", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_BAD_CONFIG);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_READ_BUS, 0, 0, 32'h35b0_0020);
+      reset_dut();
+      setup_zero_valid_case(1);
+      expect_cvxif_descriptor_error("read_bus_error", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_MEM_READ);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_READ_DATA, 0, 0, 32'h35b0_0021);
+      reset_dut();
+      setup_zero_valid_case(1);
+      expect_cvxif_descriptor_error("read_data_error", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_MEM_READ);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_WRITE_RESP, 0, 0, 32'h35b0_0022);
+      reset_dut();
+      setup_zero_valid_case(1);
+      expect_cvxif_descriptor_error("write_response_error", DESC_BASE[31:0],
+                                    DESC_BASE[31:0], ERR_MEM_WRITE);
+
+      configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35b0_0030);
+      reset_dut();
+      setup_zero_valid_case(1);
+      write_mem_word(DESC_BASE, DESC_LENGTH_WORD, 32'd1);
+      expect_legal_instr(INSTR_SPX_SET_DESC, DESC_BASE[31:0], resp);
+      expect_legal_instr(INSTR_SPX_START, 32'd0, resp);
+      do begin
+        expect_legal_instr(INSTR_SPX_STATUS, 32'd0, resp);
+      end while (!resp[STATUS_DONE_BIT]);
+      if (resp[STATUS_ERROR_BIT]) begin
+        $fatal(1, "descriptor_len_words is documented unchecked, but status errored: 0x%08x",
+               resp);
+      end
+      expect_legal_instr(INSTR_SPX_CLEAR, 32'd0, resp);
+      $display("PHASE35B_DESC_LEN_UNCHECKED descriptor_len_words=1 completed_without_error");
+    end
+  endtask
+
+  task automatic run_phase35b_wait_suite(
+      input string input_path0,
+      input string input_path1,
+      input string expected_path
+  );
+    begin
+      run_wait_success_mode("zero_wait", 0, 0, 100, 32'h35b0_1000,
+                            input_path0, input_path1, expected_path);
+      run_wait_success_mode("fixed_wait_1", 1, 1, 100, 32'h35b0_1001,
+                            input_path0, input_path1, expected_path);
+      run_wait_success_mode("fixed_wait_2", 2, 2, 100, 32'h35b0_1002,
+                            input_path0, input_path1, expected_path);
+      run_wait_success_mode("random_ready_50", 0, 0, 50, 32'h35b0_1050,
+                            input_path0, input_path1, expected_path);
+      run_wait_success_mode("random_ready_75", 0, 0, 75, 32'h35b0_1075,
+                            input_path0, input_path1, expected_path);
+      run_wait_success_mode("fixed_wait_4_smoke", 4, 4, 100, 32'h35b0_1004,
+                            input_path0, input_path1, expected_path);
+      run_wait_success_mode("split_read2_write4_smoke", 2, 4, 100, 32'h35b0_1240,
+                            input_path0, input_path1, expected_path);
+
+      run_phase35b_error_suite();
+      $display("PASS spx_cvxif_desc_adapter_wait memory wait/backpressure/error tests");
+    end
+  endtask
+
   initial begin
     string input_path [0:1];
     string expected_path;
@@ -638,9 +1125,15 @@ module tb_spx_cvxif_desc_adapter;
     expected_inblocks[0] = 1;
     expected_inblocks[1] = 2;
 
+    configure_memory_model(0, 0, 100, MEM_ERR_NONE, 0, 0, 32'h35a0_0001);
     reset_dut();
     init_metric_stats();
     test_illegal_instruction();
+
+    if ($test$plusargs("PHASE35B_WAIT")) begin
+      run_phase35b_wait_suite(input_path[0], input_path[1], expected_path);
+      $finish;
+    end
 
     expected_fd = $fopen(expected_path, "r");
     if (expected_fd == 0) begin

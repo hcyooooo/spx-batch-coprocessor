@@ -50,6 +50,7 @@ module tb_spx_descriptor_adapter #(
   logic [MEM_ADDR_WIDTH-1:0] mem_addr;
   logic [MEM_DATA_WIDTH-1:0] mem_wdata;
   logic [MEM_DATA_WIDTH-1:0] mem_rdata;
+  logic mem_error;
 
   logic [31:0] perf_load_cycles;
   logic [31:0] perf_core_cycles;
@@ -81,6 +82,7 @@ module tb_spx_descriptor_adapter #(
       .mem_addr(mem_addr),
       .mem_wdata(mem_wdata),
       .mem_rdata(mem_rdata),
+      .mem_error(mem_error),
       .perf_load_cycles(perf_load_cycles),
       .perf_core_cycles(perf_core_cycles),
       .perf_store_cycles(perf_store_cycles),
@@ -93,6 +95,7 @@ module tb_spx_descriptor_adapter #(
   end
 
   assign mem_ready = 1'b1;
+  assign mem_error = 1'b0;
 
   always_comb begin
     mem_rdata = '0;

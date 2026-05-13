@@ -19,6 +19,7 @@ module spx_descriptor_adapter #(
     output logic [MEM_ADDR_WIDTH-1:0]                 mem_addr,
     output logic [(32*MEM_WORDS_PER_CYCLE)-1:0]       mem_wdata,
     input  logic [(32*MEM_WORDS_PER_CYCLE)-1:0]       mem_rdata,
+    input  logic                                      mem_error,
 
     output logic [31:0]                               perf_load_cycles,
     output logic [31:0]                               perf_core_cycles,
@@ -52,6 +53,8 @@ module spx_descriptor_adapter #(
   localparam logic [3:0] ERR_NONE        = 4'h0;
   localparam logic [3:0] ERR_BAD_CONFIG  = 4'h1;
   localparam logic [3:0] ERR_BAD_ALIGN   = 4'h2;
+  localparam logic [3:0] ERR_MEM_READ    = 4'h3;
+  localparam logic [3:0] ERR_MEM_WRITE   = 4'h4;
 
   localparam logic [MEM_ADDR_WIDTH-1:0] MEM_ALIGN_MASK =
       MEM_ADDR_WIDTH'(MEM_BYTES_PER_CYCLE - 1);
@@ -341,29 +344,34 @@ module spx_descriptor_adapter #(
             if (descriptor_aligned) begin
               state_q <= ST_READ_DESC;
             end else begin
-              state_q <= ST_IDLE;
-              busy_q  <= 1'b0;
-              done_q  <= 1'b1;
+              state_q <= ST_WRITE_STATUS;
             end
           end
         end
 
         ST_READ_DESC: begin
+          perf_load_cycles <= perf_load_cycles + 32'd1;
           if (read_accept) begin
-            perf_load_cycles <= perf_load_cycles + 32'd1;
-            for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
-              int unsigned word_idx;
-              word_idx = int'(transfer_word_q) + lane;
-              if (word_idx < DESC_HEADER_WORDS) begin
-                desc_word_q[word_idx] <= mem_rdata[32 * lane +: 32];
-              end
-            end
-
-            if (transfer_last) begin
+            if (mem_error) begin
+              error_q         <= 1'b1;
+              error_code_q    <= ERR_MEM_READ;
               transfer_word_q <= 8'd0;
-              state_q <= ST_PARSE_DESC;
+              state_q         <= ST_WRITE_STATUS;
             end else begin
-              transfer_word_q <= transfer_word_next;
+              for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
+                int unsigned word_idx;
+                word_idx = int'(transfer_word_q) + lane;
+                if (word_idx < DESC_HEADER_WORDS) begin
+                  desc_word_q[word_idx] <= mem_rdata[32 * lane +: 32];
+                end
+              end
+
+              if (transfer_last) begin
+                transfer_word_q <= 8'd0;
+                state_q <= ST_PARSE_DESC;
+              end else begin
+                transfer_word_q <= transfer_word_next;
+              end
             end
           end
         end
@@ -395,69 +403,90 @@ module spx_descriptor_adapter #(
         end
 
         ST_READ_PUB_SEED: begin
+          perf_load_cycles <= perf_load_cycles + 32'd1;
           if (read_accept) begin
-            perf_load_cycles <= perf_load_cycles + 32'd1;
-            for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
-              int unsigned word_idx;
-              word_idx = int'(transfer_word_q) + lane;
-              if (word_idx < PUB_SEED_WORDS) begin
-                pub_seed_q[32 * word_idx +: 32] <= mem_rdata[32 * lane +: 32];
-              end
-            end
-
-            if (transfer_last) begin
+            if (mem_error) begin
+              error_q         <= 1'b1;
+              error_code_q    <= ERR_MEM_READ;
               transfer_word_q <= 8'd0;
-              state_q <= ST_READ_ADDR;
+              state_q         <= ST_WRITE_STATUS;
             end else begin
-              transfer_word_q <= transfer_word_next;
+              for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
+                int unsigned word_idx;
+                word_idx = int'(transfer_word_q) + lane;
+                if (word_idx < PUB_SEED_WORDS) begin
+                  pub_seed_q[32 * word_idx +: 32] <= mem_rdata[32 * lane +: 32];
+                end
+              end
+
+              if (transfer_last) begin
+                transfer_word_q <= 8'd0;
+                state_q <= ST_READ_ADDR;
+              end else begin
+                transfer_word_q <= transfer_word_next;
+              end
             end
           end
         end
 
         ST_READ_ADDR: begin
+          perf_load_cycles <= perf_load_cycles + 32'd1;
           if (read_accept) begin
-            perf_load_cycles <= perf_load_cycles + 32'd1;
-            for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
-              int unsigned word_idx;
-              logic [1:0] addr_lane;
-              logic [2:0] addr_word;
-              word_idx = int'(transfer_word_q) + lane;
-              addr_lane = 2'(word_idx / 8);
-              addr_word = 3'(word_idx % 8);
-              if (word_idx < ADDR_WORDS) begin
-                addr_q[addr_lane][32 * addr_word +: 32] <= mem_rdata[32 * lane +: 32];
-              end
-            end
-
-            if (transfer_last) begin
+            if (mem_error) begin
+              error_q         <= 1'b1;
+              error_code_q    <= ERR_MEM_READ;
               transfer_word_q <= 8'd0;
-              state_q <= ST_READ_INPUT;
+              state_q         <= ST_WRITE_STATUS;
             end else begin
-              transfer_word_q <= transfer_word_next;
+              for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
+                int unsigned word_idx;
+                logic [1:0] addr_lane;
+                logic [2:0] addr_word;
+                word_idx = int'(transfer_word_q) + lane;
+                addr_lane = 2'(word_idx / 8);
+                addr_word = 3'(word_idx % 8);
+                if (word_idx < ADDR_WORDS) begin
+                  addr_q[addr_lane][32 * addr_word +: 32] <= mem_rdata[32 * lane +: 32];
+                end
+              end
+
+              if (transfer_last) begin
+                transfer_word_q <= 8'd0;
+                state_q <= ST_READ_INPUT;
+              end else begin
+                transfer_word_q <= transfer_word_next;
+              end
             end
           end
         end
 
         ST_READ_INPUT: begin
+          perf_load_cycles <= perf_load_cycles + 32'd1;
           if (read_accept) begin
-            perf_load_cycles <= perf_load_cycles + 32'd1;
-            for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
-              int unsigned word_idx;
-              logic [1:0] input_lane;
-              logic [2:0] input_word;
-              word_idx = int'(transfer_word_q) + lane;
-              input_lane = 2'(word_idx / int'(input_words_per_lane_q));
-              input_word = 3'(word_idx % int'(input_words_per_lane_q));
-              if (word_idx < input_total_words_q) begin
-                input_q[input_lane][32 * input_word +: 32] <= mem_rdata[32 * lane +: 32];
-              end
-            end
-
-            if (transfer_last) begin
+            if (mem_error) begin
+              error_q         <= 1'b1;
+              error_code_q    <= ERR_MEM_READ;
               transfer_word_q <= 8'd0;
-              state_q <= ST_START_CORE;
+              state_q         <= ST_WRITE_STATUS;
             end else begin
-              transfer_word_q <= transfer_word_next;
+              for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
+                int unsigned word_idx;
+                logic [1:0] input_lane;
+                logic [2:0] input_word;
+                word_idx = int'(transfer_word_q) + lane;
+                input_lane = 2'(word_idx / int'(input_words_per_lane_q));
+                input_word = 3'(word_idx % int'(input_words_per_lane_q));
+                if (word_idx < input_total_words_q) begin
+                  input_q[input_lane][32 * input_word +: 32] <= mem_rdata[32 * lane +: 32];
+                end
+              end
+
+              if (transfer_last) begin
+                transfer_word_q <= 8'd0;
+                state_q <= ST_START_CORE;
+              end else begin
+                transfer_word_q <= transfer_word_next;
+              end
             end
           end
         end
@@ -477,20 +506,31 @@ module spx_descriptor_adapter #(
         end
 
         ST_WRITE_OUTPUT: begin
+          perf_store_cycles <= perf_store_cycles + 32'd1;
           if (write_accept) begin
-            perf_store_cycles <= perf_store_cycles + 32'd1;
-            if (transfer_last) begin
+            if (mem_error) begin
+              error_q         <= 1'b1;
+              error_code_q    <= ERR_MEM_WRITE;
               transfer_word_q <= 8'd0;
               state_q <= ST_WRITE_STATUS;
             end else begin
-              transfer_word_q <= transfer_word_next;
+              if (transfer_last) begin
+                transfer_word_q <= 8'd0;
+                state_q <= ST_WRITE_STATUS;
+              end else begin
+                transfer_word_q <= transfer_word_next;
+              end
             end
           end
         end
 
         ST_WRITE_STATUS: begin
+          perf_store_cycles <= perf_store_cycles + 32'd1;
           if (write_accept) begin
-            perf_store_cycles <= perf_store_cycles + 32'd1;
+            if (mem_error) begin
+              error_q      <= 1'b1;
+              error_code_q <= ERR_MEM_WRITE;
+            end
             busy_q <= 1'b0;
             done_q <= 1'b1;
             state_q <= ST_IDLE;

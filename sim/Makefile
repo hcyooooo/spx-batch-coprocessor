@@ -29,11 +29,11 @@ RTL_CVXIF_DESC_ADAPTER := \
 
 GEN := $(BUILD_DIR)/gen_thashx4_vectors
 
-.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter clean distclean
+.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait clean distclean
 
 all: test
 
-test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter
+test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait
 
 lint:
 	../scripts/lint_rtl.sh
@@ -147,6 +147,18 @@ sim-cvxif-desc-adapter: vectors
 		-o tb_spx_cvxif_desc_adapter \
 		$(RTL_PKG) $(RTL_CVXIF_DESC_ADAPTER) tb/tb_spx_cvxif_desc_adapter.sv
 	./$(BUILD_DIR)/obj_spx_cvxif_desc_adapter/tb_spx_cvxif_desc_adapter \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
+
+sim-cvxif-desc-adapter-wait: vectors
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		--top-module tb_spx_cvxif_desc_adapter \
+		-Mdir $(BUILD_DIR)/obj_spx_cvxif_desc_adapter_wait \
+		-o tb_spx_cvxif_desc_adapter_wait \
+		$(RTL_PKG) $(RTL_CVXIF_DESC_ADAPTER) tb/tb_spx_cvxif_desc_adapter.sv
+	./$(BUILD_DIR)/obj_spx_cvxif_desc_adapter_wait/tb_spx_cvxif_desc_adapter_wait \
+		+PHASE35B_WAIT \
 		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
 		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
 		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
