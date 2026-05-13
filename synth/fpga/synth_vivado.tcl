@@ -26,6 +26,7 @@ set rtl_files [list \
   [file join $repo_root rtl core spx_keccak_round.sv] \
   [file join $repo_root rtl core spx_keccakx4_core.sv] \
   [file join $repo_root rtl core spx_thashx4_core.sv] \
+  [file join $repo_root rtl wrapper spx_cop_wrapper.sv] \
 ]
 
 puts "INFO: Synthesizing standalone accelerator top=$top part=$part clock=${clock_period_ns}ns"

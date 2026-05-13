@@ -21,4 +21,14 @@ echo "Linting standalone SPHINCS+ thashx4 RTL with ${VERILATOR}"
   --top-module spx_thashx4_core \
   "${RTL_FILES[@]}"
 
+echo "Linting standalone SPHINCS+ coprocessor wrapper with ${VERILATOR}"
+"${VERILATOR}" \
+  -sv \
+  --lint-only \
+  --timing \
+  --Wall \
+  --top-module spx_cop_wrapper \
+  "${RTL_FILES[@]}" \
+  "${REPO_ROOT}/rtl/wrapper/spx_cop_wrapper.sv"
+
 echo "PASS rtl lint"

@@ -11,6 +11,9 @@ Start here:
 - [Phase 0.5 batch utilization](docs/sphincs_batch_utilization.md)
 - [Phase 1 / 1.5 C model](docs/phase1_c_model.md)
 - [Phase 1.6 batch scheduler](docs/phase1_6_batch_scheduler.md)
+- [Phase 2 standalone RTL](docs/phase2_standalone_rtl.md)
+- [Phase 2.5 RTL PPA](docs/phase2_5_rtl_ppa.md)
+- [Phase 3.0 coprocessor wrapper](docs/phase3_0_cop_wrapper.md)
 
 Primary software target:
 

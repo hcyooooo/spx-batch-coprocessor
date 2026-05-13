@@ -11,14 +11,17 @@ RTL_KECCAK := \
 RTL_THASH := \
 	$(RTL_KECCAK) \
 	../rtl/core/spx_thashx4_core.sv
+RTL_COP_WRAPPER := \
+	$(RTL_THASH) \
+	../rtl/wrapper/spx_cop_wrapper.sv
 
 GEN := $(BUILD_DIR)/gen_thashx4_vectors
 
-.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 clean distclean
+.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 sim-cop-wrapper clean distclean
 
 all: test
 
-test: sim-keccakx4 sim-thashx4
+test: sim-keccakx4 sim-thashx4 sim-cop-wrapper
 
 lint:
 	../scripts/lint_rtl.sh
@@ -50,6 +53,17 @@ sim-thashx4: vectors
 		-o tb_thashx4_core \
 		$(RTL_PKG) $(RTL_THASH) tb/tb_thashx4_core.sv
 	./$(BUILD_DIR)/obj_thashx4_core/tb_thashx4_core \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
+
+sim-cop-wrapper: vectors
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		--top-module tb_spx_cop_wrapper \
+		-Mdir $(BUILD_DIR)/obj_spx_cop_wrapper \
+		-o tb_spx_cop_wrapper \
+		$(RTL_PKG) $(RTL_COP_WRAPPER) tb/tb_spx_cop_wrapper.sv
+	./$(BUILD_DIR)/obj_spx_cop_wrapper/tb_spx_cop_wrapper \
 		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
 		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
 		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex

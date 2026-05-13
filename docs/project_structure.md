@@ -1,9 +1,7 @@
 # Project Structure
 
-This repository keeps software profiling, C reference experiments, future RTL,
-and simulation scaffolding separated on purpose. The current committed work is
-software-first; `rtl/` and most porting directories are placeholders until the
-C model and profiling data are stable.
+This repository keeps software profiling, C reference experiments, RTL, and
+simulation scaffolding separated on purpose.
 
 ```text
 spx-batch-coprocessor/
@@ -13,7 +11,10 @@ spx-batch-coprocessor/
 │   ├── sphincs_profile_result.md
 │   ├── sphincs_batch_utilization.md
 │   ├── phase1_c_model.md
-│   └── phase1_6_batch_scheduler.md
+│   ├── phase1_6_batch_scheduler.md
+│   ├── phase2_standalone_rtl.md
+│   ├── phase2_5_rtl_ppa.md
+│   └── phase3_0_cop_wrapper.md
 ├── sw/
 │   ├── sphincsplus/
 │   │   ├── ref/
@@ -29,6 +30,7 @@ spx-batch-coprocessor/
 ├── rtl/
 │   ├── common/
 │   ├── core/
+│   ├── wrapper/
 │   ├── interface/
 │   └── spx_accel/
 └── sim/
@@ -51,8 +53,8 @@ standalone C model pieces, and future platform/porting code.
 
 `rtl/`
 
-Reserved for future hardware implementation. It is intentionally empty apart
-from `.gitkeep` placeholders right now.
+Hardware implementation. The current standalone path contains common packages,
+Keccak/thashx4 cores, and the Phase 3.0 command-register wrapper.
 
 `sim/`
 
@@ -103,11 +105,17 @@ Placeholder for future bare-metal examples or bring-up code.
 
 `rtl/common/`
 
-Shared RTL utilities or packages once hardware work begins.
+Shared RTL utilities and packages.
 
 `rtl/core/`
 
-Future standalone primitive cores, such as Keccak permutation datapaths.
+Standalone primitive cores, including the Keccak permutation datapath and
+`spx_thashx4_core`.
+
+`rtl/wrapper/`
+
+Coprocessor-style wrappers that narrow standalone core ports into command or
+host-facing interfaces. Phase 3.0 adds `spx_cop_wrapper.sv`.
 
 `rtl/interface/`
 
@@ -119,11 +127,11 @@ Future SPHINCS+-specific accelerator top-level blocks.
 
 `sim/tb/`
 
-Future testbenches.
+RTL testbenches.
 
 `sim/vectors/`
 
-Future generated or captured test vectors.
+Generated or captured test vectors.
 
 ## Current Build Entry Points
 
@@ -160,4 +168,16 @@ Phase 1.6 scheduler experiment:
 
 ```sh
 make -C sw/sphincsplus/ref PARAMS=sphincs-shake-128f THASH=simple batch-test
+```
+
+RTL regression:
+
+```sh
+make -C sim test
+```
+
+Standalone wrapper simulation:
+
+```sh
+make -C sim sim-cop-wrapper
 ```
