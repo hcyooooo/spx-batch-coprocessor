@@ -75,4 +75,13 @@ echo "Linting standalone SPHINCS+ CV-X-IF descriptor-control adapter with ${VERI
   --top-module spx_cvxif_desc_adapter \
   "${REPO_ROOT}/rtl/cvxif/spx_cvxif_desc_adapter.sv"
 
+echo "Linting standalone SPHINCS+ memory master shim mock with ${VERILATOR}"
+"${VERILATOR}" \
+  -sv \
+  --lint-only \
+  --timing \
+  --Wall \
+  --top-module spx_mem_master_shim_mock \
+  "${REPO_ROOT}/rtl/mem/spx_mem_master_shim_mock.sv"
+
 echo "PASS rtl lint"

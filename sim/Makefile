@@ -26,14 +26,16 @@ RTL_DESCRIPTOR_ADAPTER := \
 RTL_CVXIF_DESC_ADAPTER := \
 	$(RTL_DESCRIPTOR_ADAPTER) \
 	../rtl/cvxif/spx_cvxif_desc_adapter.sv
+RTL_MEM_MASTER_SHIM := \
+	../rtl/mem/spx_mem_master_shim_mock.sv
 
 GEN := $(BUILD_DIR)/gen_thashx4_vectors
 
-.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait clean distclean
+.PHONY: all test vectors lint sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim clean distclean
 
 all: test
 
-test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait
+test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim
 
 lint:
 	../scripts/lint_rtl.sh
@@ -159,6 +161,18 @@ sim-cvxif-desc-adapter-wait: vectors
 		$(RTL_PKG) $(RTL_CVXIF_DESC_ADAPTER) tb/tb_spx_cvxif_desc_adapter.sv
 	./$(BUILD_DIR)/obj_spx_cvxif_desc_adapter_wait/tb_spx_cvxif_desc_adapter_wait \
 		+PHASE35B_WAIT \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
+
+sim-mem-master-shim: vectors
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		--top-module tb_spx_mem_master_shim_mock \
+		-Mdir $(BUILD_DIR)/obj_spx_mem_master_shim_mock \
+		-o tb_spx_mem_master_shim_mock \
+		$(RTL_PKG) $(RTL_CVXIF_DESC_ADAPTER) $(RTL_MEM_MASTER_SHIM) \
+		tb/tb_spx_mem_master_shim_mock.sv
+	./$(BUILD_DIR)/obj_spx_mem_master_shim_mock/tb_spx_mem_master_shim_mock \
 		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
 		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
 		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
