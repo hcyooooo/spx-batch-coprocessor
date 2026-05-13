@@ -14,7 +14,8 @@ spx-batch-coprocessor/
 │   ├── phase1_6_batch_scheduler.md
 │   ├── phase2_standalone_rtl.md
 │   ├── phase2_5_rtl_ppa.md
-│   └── phase3_0_cop_wrapper.md
+│   ├── phase3_0_cop_wrapper.md
+│   └── phase3_1_cvxif_adapter_plan.md
 ├── sw/
 │   ├── sphincsplus/
 │   │   ├── ref/
@@ -31,6 +32,7 @@ spx-batch-coprocessor/
 │   ├── common/
 │   ├── core/
 │   ├── wrapper/
+│   ├── cvxif/
 │   ├── interface/
 │   └── spx_accel/
 └── sim/
@@ -54,7 +56,8 @@ standalone C model pieces, and future platform/porting code.
 `rtl/`
 
 Hardware implementation. The current standalone path contains common packages,
-Keccak/thashx4 cores, and the Phase 3.0 command-register wrapper.
+Keccak/thashx4 cores, the Phase 3.0 command-register wrapper, and the Phase
+3.1A CV-X-IF-style adapter shell.
 
 `sim/`
 
@@ -116,6 +119,11 @@ Standalone primitive cores, including the Keccak permutation datapath and
 
 Coprocessor-style wrappers that narrow standalone core ports into command or
 host-facing interfaces. Phase 3.0 adds `spx_cop_wrapper.sv`.
+
+`rtl/cvxif/`
+
+CV-X-IF-style adapter shells. Phase 3.1A adds `spx_cvxif_adapter.sv`, a
+standalone custom-instruction simulation layer above `spx_cop_wrapper`.
 
 `rtl/interface/`
 
@@ -180,4 +188,10 @@ Standalone wrapper simulation:
 
 ```sh
 make -C sim sim-cop-wrapper
+```
+
+Standalone CV-X-IF-style adapter simulation:
+
+```sh
+make -C sim sim-cvxif-adapter
 ```
