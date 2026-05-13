@@ -42,4 +42,15 @@ echo "Linting standalone SPHINCS+ CV-X-IF-style adapter with ${VERILATOR}"
   "${REPO_ROOT}/rtl/wrapper/spx_cop_wrapper.sv" \
   "${REPO_ROOT}/rtl/cvxif/spx_cvxif_adapter.sv"
 
+echo "Linting standalone SPHINCS+ coarse CV-X-IF-style adapter with ${VERILATOR}"
+"${VERILATOR}" \
+  -sv \
+  --lint-only \
+  --timing \
+  --Wall \
+  --top-module spx_cvxif_adapter_coarse \
+  "${RTL_FILES[@]}" \
+  "${REPO_ROOT}/rtl/wrapper/spx_cop_wrapper.sv" \
+  "${REPO_ROOT}/rtl/cvxif/spx_cvxif_adapter_coarse.sv"
+
 echo "PASS rtl lint"
