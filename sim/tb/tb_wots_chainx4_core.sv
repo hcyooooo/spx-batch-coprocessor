@@ -25,6 +25,25 @@ module tb_wots_chainx4_core;
   logic [127:0] out2;
   logic [127:0] out3;
 
+  logic         wots_req_valid;
+  logic         wots_req_ready;
+  logic [127:0] wots_req_pub_seed;
+  logic [255:0] wots_req_addr0;
+  logic [255:0] wots_req_addr1;
+  logic [255:0] wots_req_addr2;
+  logic [255:0] wots_req_addr3;
+  logic [255:0] wots_req_in0;
+  logic [255:0] wots_req_in1;
+  logic [255:0] wots_req_in2;
+  logic [255:0] wots_req_in3;
+  logic         wots_rsp_valid;
+  logic [127:0] wots_rsp_out0;
+  logic [127:0] wots_rsp_out1;
+  logic [127:0] wots_rsp_out2;
+  logic [127:0] wots_rsp_out3;
+  logic         thash_core_start;
+  logic         thash_busy_q;
+
   spx_wots_chainx4_core dut (
       .clk(clk),
       .rst_n(rst_n),
@@ -46,8 +65,58 @@ module tb_wots_chainx4_core;
       .out0(out0),
       .out1(out1),
       .out2(out2),
-      .out3(out3)
+      .out3(out3),
+      .wots_req_valid(wots_req_valid),
+      .wots_req_ready(wots_req_ready),
+      .wots_req_pub_seed(wots_req_pub_seed),
+      .wots_req_addr0(wots_req_addr0),
+      .wots_req_addr1(wots_req_addr1),
+      .wots_req_addr2(wots_req_addr2),
+      .wots_req_addr3(wots_req_addr3),
+      .wots_req_in0(wots_req_in0),
+      .wots_req_in1(wots_req_in1),
+      .wots_req_in2(wots_req_in2),
+      .wots_req_in3(wots_req_in3),
+      .wots_rsp_valid(wots_rsp_valid),
+      .wots_rsp_out0(wots_rsp_out0),
+      .wots_rsp_out1(wots_rsp_out1),
+      .wots_rsp_out2(wots_rsp_out2),
+      .wots_rsp_out3(wots_rsp_out3)
   );
+
+  assign wots_req_ready = !thash_busy_q;
+  assign thash_core_start = wots_req_valid && wots_req_ready;
+
+  spx_thashx4_core u_shared_thashx4_core (
+      .clk(clk),
+      .rst_n(rst_n),
+      .start(thash_core_start),
+      .inblocks(2'd1),
+      .pub_seed(wots_req_pub_seed),
+      .addr0(wots_req_addr0),
+      .addr1(wots_req_addr1),
+      .addr2(wots_req_addr2),
+      .addr3(wots_req_addr3),
+      .in0(wots_req_in0),
+      .in1(wots_req_in1),
+      .in2(wots_req_in2),
+      .in3(wots_req_in3),
+      .done(wots_rsp_valid),
+      .out0(wots_rsp_out0),
+      .out1(wots_rsp_out1),
+      .out2(wots_rsp_out2),
+      .out3(wots_rsp_out3)
+  );
+
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      thash_busy_q <= 1'b0;
+    end else if (thash_core_start) begin
+      thash_busy_q <= 1'b1;
+    end else if (wots_rsp_valid) begin
+      thash_busy_q <= 1'b0;
+    end
+  end
 
   initial begin
     clk = 1'b0;

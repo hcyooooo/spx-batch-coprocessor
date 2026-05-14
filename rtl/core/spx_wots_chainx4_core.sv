@@ -25,7 +25,25 @@ module spx_wots_chainx4_core (
     output logic [127:0] out0,
     output logic [127:0] out1,
     output logic [127:0] out2,
-    output logic [127:0] out3
+    output logic [127:0] out3,
+
+    output logic         wots_req_valid,
+    input  logic         wots_req_ready,
+    output logic [127:0] wots_req_pub_seed,
+    output logic [255:0] wots_req_addr0,
+    output logic [255:0] wots_req_addr1,
+    output logic [255:0] wots_req_addr2,
+    output logic [255:0] wots_req_addr3,
+    output logic [255:0] wots_req_in0,
+    output logic [255:0] wots_req_in1,
+    output logic [255:0] wots_req_in2,
+    output logic [255:0] wots_req_in3,
+
+    input  logic         wots_rsp_valid,
+    input  logic [127:0] wots_rsp_out0,
+    input  logic [127:0] wots_rsp_out1,
+    input  logic [127:0] wots_rsp_out2,
+    input  logic [127:0] wots_rsp_out3
 );
   timeunit 1ns;
   timeprecision 1ps;
@@ -53,18 +71,20 @@ module spx_wots_chainx4_core (
   logic [7:0]   step_q;
   logic [7:0]   steps_left_q;
 
-  logic         thash_start;
-  logic         thash_done;
-  logic [127:0] thash_out0;
-  logic [127:0] thash_out1;
-  logic [127:0] thash_out2;
-  logic [127:0] thash_out3;
-
   logic [8:0] requested_end;
   logic       start_config_ok;
 
   assign busy = (state_q != ST_IDLE);
-  assign thash_start = (state_q == ST_START_THASH);
+  assign wots_req_valid = (state_q == ST_START_THASH);
+  assign wots_req_pub_seed = pub_seed_q;
+  assign wots_req_addr0 = addr0_q;
+  assign wots_req_addr1 = addr1_q;
+  assign wots_req_addr2 = addr2_q;
+  assign wots_req_addr3 = addr3_q;
+  assign wots_req_in0 = {128'd0, chain0_q};
+  assign wots_req_in1 = {128'd0, chain1_q};
+  assign wots_req_in2 = {128'd0, chain2_q};
+  assign wots_req_in3 = {128'd0, chain3_q};
   assign requested_end = {1'b0, start_step} + {1'b0, num_steps};
   assign start_config_ok = (start_step <= 8'(SPX_WOTS_W)) &&
                            (num_steps <= 8'(SPX_WOTS_W - 1)) &&
@@ -81,27 +101,6 @@ module spx_wots_chainx4_core (
       addr_with_hash = updated;
     end
   endfunction
-
-  spx_thashx4_core u_thashx4_core (
-      .clk(clk),
-      .rst_n(rst_n),
-      .start(thash_start),
-      .inblocks(2'd1),
-      .pub_seed(pub_seed_q),
-      .addr0(addr0_q),
-      .addr1(addr1_q),
-      .addr2(addr2_q),
-      .addr3(addr3_q),
-      .in0({128'd0, chain0_q}),
-      .in1({128'd0, chain1_q}),
-      .in2({128'd0, chain2_q}),
-      .in3({128'd0, chain3_q}),
-      .done(thash_done),
-      .out0(thash_out0),
-      .out1(thash_out1),
-      .out2(thash_out2),
-      .out3(thash_out3)
-  );
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
@@ -162,24 +161,26 @@ module spx_wots_chainx4_core (
         end
 
         ST_START_THASH: begin
-          state_q <= ST_WAIT_THASH;
+          if (wots_req_ready) begin
+            state_q <= ST_WAIT_THASH;
+          end
         end
 
         ST_WAIT_THASH: begin
-          if (thash_done) begin
+          if (wots_rsp_valid) begin
             if (steps_left_q == 8'd1) begin
-              out0         <= thash_out0;
-              out1         <= thash_out1;
-              out2         <= thash_out2;
-              out3         <= thash_out3;
+              out0         <= wots_rsp_out0;
+              out1         <= wots_rsp_out1;
+              out2         <= wots_rsp_out2;
+              out3         <= wots_rsp_out3;
               steps_left_q <= 8'd0;
               done         <= 1'b1;
               state_q      <= ST_IDLE;
             end else begin
-              chain0_q     <= thash_out0;
-              chain1_q     <= thash_out1;
-              chain2_q     <= thash_out2;
-              chain3_q     <= thash_out3;
+              chain0_q     <= wots_rsp_out0;
+              chain1_q     <= wots_rsp_out1;
+              chain2_q     <= wots_rsp_out2;
+              chain3_q     <= wots_rsp_out3;
               step_q       <= step_q + 8'd1;
               steps_left_q <= steps_left_q - 8'd1;
               addr0_q      <= addr_with_hash(addr0_q, step_q + 8'd1);

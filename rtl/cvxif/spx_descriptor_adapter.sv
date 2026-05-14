@@ -136,10 +136,34 @@ module spx_descriptor_adapter #(
   logic         wots_core_start;
   logic         core_done;
   logic         core_error;
-  logic         thash_core_done;
+  logic         shared_thash_start;
+  logic         shared_thash_done;
+  logic         shared_thash_busy_q;
+  logic [1:0]   shared_thash_inblocks;
+  logic [127:0] shared_thash_pub_seed;
+  logic [255:0] shared_thash_addr0;
+  logic [255:0] shared_thash_addr1;
+  logic [255:0] shared_thash_addr2;
+  logic [255:0] shared_thash_addr3;
+  logic [255:0] shared_thash_in0;
+  logic [255:0] shared_thash_in1;
+  logic [255:0] shared_thash_in2;
+  logic [255:0] shared_thash_in3;
   logic         wots_core_done;
   logic         unused_wots_core_busy;
   logic         wots_core_error;
+  logic         wots_req_valid;
+  logic         wots_req_ready;
+  logic [127:0] wots_req_pub_seed;
+  logic [255:0] wots_req_addr0;
+  logic [255:0] wots_req_addr1;
+  logic [255:0] wots_req_addr2;
+  logic [255:0] wots_req_addr3;
+  logic [255:0] wots_req_in0;
+  logic [255:0] wots_req_in1;
+  logic [255:0] wots_req_in2;
+  logic [255:0] wots_req_in3;
+  logic         wots_rsp_valid;
   logic [127:0] thash_core_out0;
   logic [127:0] thash_core_out1;
   logic [127:0] thash_core_out2;
@@ -165,6 +189,32 @@ module spx_descriptor_adapter #(
                             (op_type_q == OP_TYPE_THASHX4);
   assign wots_core_start = (state_q == ST_START_CORE) &&
                            (op_type_q == OP_TYPE_WOTS_CHAINX4);
+  assign wots_req_ready = (op_type_q == OP_TYPE_WOTS_CHAINX4) &&
+                          !shared_thash_busy_q;
+  assign wots_rsp_valid = (op_type_q == OP_TYPE_WOTS_CHAINX4) &&
+                          shared_thash_done;
+  assign shared_thash_start = thash_core_start ||
+                              (wots_req_valid && wots_req_ready);
+  assign shared_thash_inblocks = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                                 2'd1 : inblocks_q;
+  assign shared_thash_pub_seed = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                                 wots_req_pub_seed : pub_seed_q;
+  assign shared_thash_addr0 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                              wots_req_addr0 : addr_q[0];
+  assign shared_thash_addr1 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                              wots_req_addr1 : addr_q[1];
+  assign shared_thash_addr2 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                              wots_req_addr2 : addr_q[2];
+  assign shared_thash_addr3 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                              wots_req_addr3 : addr_q[3];
+  assign shared_thash_in0 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                            wots_req_in0 : input_q[0];
+  assign shared_thash_in1 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                            wots_req_in1 : input_q[1];
+  assign shared_thash_in2 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                            wots_req_in2 : input_q[2];
+  assign shared_thash_in3 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
+                            wots_req_in3 : input_q[3];
 
   assign transfer_word_next = transfer_word_q + 8'(MEM_WORDS_PER_CYCLE);
   assign transfer_last = (transfer_word_next >= burst_total_words);
@@ -319,7 +369,7 @@ module spx_descriptor_adapter #(
   end
 
   assign core_done = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                     wots_core_done : thash_core_done;
+                     wots_core_done : shared_thash_done;
   assign core_error = (op_type_q == OP_TYPE_WOTS_CHAINX4) && wots_core_error;
   assign core_out0 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
                      wots_core_out0 : thash_core_out0;
@@ -333,18 +383,18 @@ module spx_descriptor_adapter #(
   spx_thashx4_core u_thashx4_core (
       .clk(clk),
       .rst_n(rst_n),
-      .start(thash_core_start),
-      .inblocks(inblocks_q),
-      .pub_seed(pub_seed_q),
-      .addr0(addr_q[0]),
-      .addr1(addr_q[1]),
-      .addr2(addr_q[2]),
-      .addr3(addr_q[3]),
-      .in0(input_q[0]),
-      .in1(input_q[1]),
-      .in2(input_q[2]),
-      .in3(input_q[3]),
-      .done(thash_core_done),
+      .start(shared_thash_start),
+      .inblocks(shared_thash_inblocks),
+      .pub_seed(shared_thash_pub_seed),
+      .addr0(shared_thash_addr0),
+      .addr1(shared_thash_addr1),
+      .addr2(shared_thash_addr2),
+      .addr3(shared_thash_addr3),
+      .in0(shared_thash_in0),
+      .in1(shared_thash_in1),
+      .in2(shared_thash_in2),
+      .in3(shared_thash_in3),
+      .done(shared_thash_done),
       .out0(thash_core_out0),
       .out1(thash_core_out1),
       .out2(thash_core_out2),
@@ -372,7 +422,23 @@ module spx_descriptor_adapter #(
       .out0(wots_core_out0),
       .out1(wots_core_out1),
       .out2(wots_core_out2),
-      .out3(wots_core_out3)
+      .out3(wots_core_out3),
+      .wots_req_valid(wots_req_valid),
+      .wots_req_ready(wots_req_ready),
+      .wots_req_pub_seed(wots_req_pub_seed),
+      .wots_req_addr0(wots_req_addr0),
+      .wots_req_addr1(wots_req_addr1),
+      .wots_req_addr2(wots_req_addr2),
+      .wots_req_addr3(wots_req_addr3),
+      .wots_req_in0(wots_req_in0),
+      .wots_req_in1(wots_req_in1),
+      .wots_req_in2(wots_req_in2),
+      .wots_req_in3(wots_req_in3),
+      .wots_rsp_valid(wots_rsp_valid),
+      .wots_rsp_out0(thash_core_out0),
+      .wots_rsp_out1(thash_core_out1),
+      .wots_rsp_out2(thash_core_out2),
+      .wots_rsp_out3(thash_core_out3)
   );
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -395,6 +461,7 @@ module spx_descriptor_adapter #(
       done_q                 <= 1'b0;
       error_q                <= 1'b0;
       error_code_q           <= ERR_NONE;
+      shared_thash_busy_q    <= 1'b0;
       pub_seed_q             <= '0;
       addr_q[0]              <= '0;
       addr_q[1]              <= '0;
@@ -412,6 +479,12 @@ module spx_descriptor_adapter #(
         desc_word_q[word] <= 32'd0;
       end
     end else begin
+      if (shared_thash_start) begin
+        shared_thash_busy_q <= 1'b1;
+      end else if (shared_thash_done) begin
+        shared_thash_busy_q <= 1'b0;
+      end
+
       if (busy_q) begin
         perf_total_cycles <= perf_total_cycles + 32'd1;
       end
@@ -441,6 +514,7 @@ module spx_descriptor_adapter #(
             op_type_q              <= OP_TYPE_THASHX4;
             start_step_q           <= 8'd0;
             num_steps_q            <= 8'd0;
+            shared_thash_busy_q    <= 1'b0;
             if (descriptor_aligned) begin
               state_q <= ST_READ_DESC;
             end else begin
