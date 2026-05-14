@@ -33,6 +33,26 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   localparam int BUS_ERR_NONE       = 0;
   localparam int BUS_ERR_READ_ONCE  = 1;
   localparam int BUS_ERR_WRITE_ONCE = 2;
+  localparam int DESC_DONE_TIMEOUT_CYCLES = 20000;
+  localparam int XIF_RESULT_TIMEOUT_CYCLES = 2000;
+
+  localparam logic [6:0] SPX_OPCODE_CUSTOM0 = 7'b0001011;
+  localparam logic [6:0] SPX_FUNCT7         = 7'h5a;
+  localparam logic [2:0] SPX_F3_SET_DESC    = 3'h0;
+  localparam logic [2:0] SPX_F3_START       = 3'h1;
+  localparam logic [2:0] SPX_F3_STATUS      = 3'h2;
+  localparam logic [2:0] SPX_F3_CLEAR       = 3'h3;
+
+  localparam int XIF_OP_SET_DESC = 0;
+  localparam int XIF_OP_START    = 1;
+  localparam int XIF_OP_STATUS   = 2;
+  localparam int XIF_OP_CLEAR    = 3;
+  localparam int XIF_OP_COUNT    = 4;
+  localparam int XIF_OP_UNKNOWN  = 4;
+  localparam int XIF_IDS         = 1 << X_ID_WIDTH;
+
+  localparam int STATUS_DONE_BIT  = 1;
+  localparam int STATUS_ERROR_BIT = 2;
 
   logic clk;
   logic rst_n;
@@ -148,6 +168,53 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   logic        bus_rsp_pending_q;
   logic [MEM_DATA_WIDTH-1:0] bus_rsp_rdata_q;
   logic        bus_rsp_error_q;
+  string       smoke_mode_cfg;
+
+  logic        xif_outstanding_q [0:XIF_IDS-1];
+  logic        xif_committed_q [0:XIF_IDS-1];
+  int unsigned xif_outstanding_op_q [0:XIF_IDS-1];
+  int unsigned xif_issue_cycle_q [0:XIF_IDS-1];
+  int unsigned xif_commit_cycle_q [0:XIF_IDS-1];
+
+  int unsigned xif_latency_count_q [0:XIF_OP_COUNT-1];
+  int unsigned xif_issue_commit_min_q [0:XIF_OP_COUNT-1];
+  int unsigned xif_issue_commit_max_q [0:XIF_OP_COUNT-1];
+  longint unsigned xif_issue_commit_sum_q [0:XIF_OP_COUNT-1];
+  int unsigned xif_commit_result_min_q [0:XIF_OP_COUNT-1];
+  int unsigned xif_commit_result_max_q [0:XIF_OP_COUNT-1];
+  longint unsigned xif_commit_result_sum_q [0:XIF_OP_COUNT-1];
+  int unsigned xif_issue_result_min_q [0:XIF_OP_COUNT-1];
+  int unsigned xif_issue_result_max_q [0:XIF_OP_COUNT-1];
+  longint unsigned xif_issue_result_sum_q [0:XIF_OP_COUNT-1];
+
+  logic        case_active_q;
+  logic        case_done_seen_q;
+  logic        case_pass_q;
+  int unsigned case_next_id_q;
+  int unsigned case_active_id_q;
+  int unsigned case_inblocks_q;
+  int unsigned case_start_cycle_q;
+  int unsigned case_done_cycle_q;
+  int unsigned case_xif_count_q;
+  int unsigned case_status_polls_q;
+  int unsigned case_bus_rd_q;
+  int unsigned case_bus_wr_q;
+
+  int unsigned case_perf_count_q;
+  int unsigned case_fail_count_q;
+  longint unsigned case_cycles_sum_q;
+  longint unsigned case_status_polls_sum_q;
+  longint unsigned case_xif_sum_q;
+  longint unsigned case_bus_rd_sum_q;
+  longint unsigned case_bus_wr_sum_q;
+  longint unsigned case_perf_total_sum_q;
+  longint unsigned case_wait_saved_sum_q;
+  longint unsigned case_irq_saved_sum_q;
+
+  logic        desc_watch_active_q;
+  logic        desc_done_prev_q;
+  int unsigned desc_watch_case_id_q;
+  int unsigned desc_watch_start_cycle_q;
 
   initial begin
     clk = 1'b0;
@@ -165,6 +232,29 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
     void'($value$plusargs("SMOKE_REQ_READY_PCT=%d", bus_req_ready_pct_cfg));
     if (bus_req_ready_pct_cfg > 100) begin
       bus_req_ready_pct_cfg = 100;
+    end
+    if (!$value$plusargs("SMOKE_MODE=%s", smoke_mode_cfg)) begin
+      if ((bus_read_latency_cfg == 0) && (bus_write_latency_cfg == 0) &&
+          (bus_req_ready_pct_cfg == 100)) begin
+        smoke_mode_cfg = "zero_wait";
+      end else if ((bus_read_latency_cfg == 1) && (bus_write_latency_cfg == 1) &&
+                   (bus_req_ready_pct_cfg == 100)) begin
+        smoke_mode_cfg = "wait1";
+      end else if ((bus_read_latency_cfg == 2) && (bus_write_latency_cfg == 2) &&
+                   (bus_req_ready_pct_cfg == 100)) begin
+        smoke_mode_cfg = "wait2";
+      end else if ((bus_read_latency_cfg == 2) && (bus_write_latency_cfg == 4) &&
+                   (bus_req_ready_pct_cfg == 100)) begin
+        smoke_mode_cfg = "split";
+      end else if ((bus_read_latency_cfg == 0) && (bus_write_latency_cfg == 0) &&
+                   (bus_req_ready_pct_cfg == 50)) begin
+        smoke_mode_cfg = "random50";
+      end else if ((bus_read_latency_cfg == 0) && (bus_write_latency_cfg == 0) &&
+                   (bus_req_ready_pct_cfg == 75)) begin
+        smoke_mode_cfg = "random75";
+      end else begin
+        smoke_mode_cfg = "custom";
+      end
     end
   end
 
@@ -284,6 +374,124 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
       xorshift32 = (next_value == 32'd0) ? 32'hc032_3e8a : next_value;
     end
   endfunction
+
+  function automatic int unsigned decode_xif_op(input logic [31:0] instr);
+    logic [6:0] opcode;
+    logic [2:0] funct3;
+    logic [4:0] rs1;
+    logic [4:0] rs2;
+    logic [6:0] funct7;
+    begin
+      opcode = instr[6:0];
+      funct3 = instr[14:12];
+      rs1    = instr[19:15];
+      rs2    = instr[24:20];
+      funct7 = instr[31:25];
+
+      decode_xif_op = XIF_OP_UNKNOWN;
+      if ((opcode == SPX_OPCODE_CUSTOM0) && (funct7 == SPX_FUNCT7) &&
+          (rs2 == 5'd0)) begin
+        unique case (funct3)
+          SPX_F3_SET_DESC: begin
+            decode_xif_op = XIF_OP_SET_DESC;
+          end
+          SPX_F3_START: begin
+            if (rs1 == 5'd0) begin
+              decode_xif_op = XIF_OP_START;
+            end
+          end
+          SPX_F3_STATUS: begin
+            if (rs1 == 5'd0) begin
+              decode_xif_op = XIF_OP_STATUS;
+            end
+          end
+          SPX_F3_CLEAR: begin
+            if (rs1 == 5'd0) begin
+              decode_xif_op = XIF_OP_CLEAR;
+            end
+          end
+          default: begin
+            decode_xif_op = XIF_OP_UNKNOWN;
+          end
+        endcase
+      end
+    end
+  endfunction
+
+  function automatic string xif_op_name(input int unsigned op);
+    begin
+      unique case (op)
+        XIF_OP_SET_DESC: xif_op_name = "SPX_SET_DESC";
+        XIF_OP_START:    xif_op_name = "SPX_START";
+        XIF_OP_STATUS:   xif_op_name = "SPX_STATUS";
+        XIF_OP_CLEAR:    xif_op_name = "SPX_CLEAR";
+        default:         xif_op_name = "UNKNOWN";
+      endcase
+    end
+  endfunction
+
+  task automatic print_xif_latency_summary;
+    real issue_commit_avg;
+    real commit_result_avg;
+    real issue_result_avg;
+    begin
+      for (int op = 0; op < XIF_OP_COUNT; op++) begin
+        if (xif_latency_count_q[op] == 0) begin
+          $display("XIF_LATENCY type=%s count=0 issue_commit_min=0 issue_commit_max=0 issue_commit_avg=0.00 commit_result_min=0 commit_result_max=0 commit_result_avg=0.00 issue_result_min=0 issue_result_max=0 issue_result_avg=0.00",
+                   xif_op_name(op));
+        end else begin
+          issue_commit_avg = real'(xif_issue_commit_sum_q[op]) /
+                             real'(xif_latency_count_q[op]);
+          commit_result_avg = real'(xif_commit_result_sum_q[op]) /
+                              real'(xif_latency_count_q[op]);
+          issue_result_avg = real'(xif_issue_result_sum_q[op]) /
+                             real'(xif_latency_count_q[op]);
+          $display("XIF_LATENCY type=%s count=%0d issue_commit_min=%0d issue_commit_max=%0d issue_commit_avg=%0.2f commit_result_min=%0d commit_result_max=%0d commit_result_avg=%0.2f issue_result_min=%0d issue_result_max=%0d issue_result_avg=%0.2f",
+                   xif_op_name(op), xif_latency_count_q[op],
+                   xif_issue_commit_min_q[op], xif_issue_commit_max_q[op],
+                   issue_commit_avg,
+                   xif_commit_result_min_q[op], xif_commit_result_max_q[op],
+                   commit_result_avg,
+                   xif_issue_result_min_q[op], xif_issue_result_max_q[op],
+                   issue_result_avg);
+        end
+      end
+    end
+  endtask
+
+  task automatic print_core_smoke_perf_summary;
+    real avg_cycles;
+    real avg_status_polls;
+    real avg_xif_instr;
+    real avg_bus_rd;
+    real avg_bus_wr;
+    real avg_perf_total;
+    real cycles_per_thash_equiv;
+    real avg_wait_saved;
+    real avg_irq_saved;
+    begin
+      if (case_perf_count_q == 0) begin
+        $display("CORE_SMOKE_PERF_SUMMARY mode=%s cases=0 avg_cycles_per_case=0.00 avg_status_polls=0.00 avg_xif_instr=0.00 avg_bus_rd=0.00 avg_bus_wr=0.00 avg_perf_total=0.00 effective_thash_per_case=4 cycles_per_thash_equiv=0.00 estimated_speedup_basis=polling_status_to_wait avg_wait_saved_instr=0.00 avg_irq_saved_instr=0.00",
+                 smoke_mode_cfg);
+      end else begin
+        avg_cycles = real'(case_cycles_sum_q) / real'(case_perf_count_q);
+        avg_status_polls = real'(case_status_polls_sum_q) / real'(case_perf_count_q);
+        avg_xif_instr = real'(case_xif_sum_q) / real'(case_perf_count_q);
+        avg_bus_rd = real'(case_bus_rd_sum_q) / real'(case_perf_count_q);
+        avg_bus_wr = real'(case_bus_wr_sum_q) / real'(case_perf_count_q);
+        avg_perf_total = real'(case_perf_total_sum_q) / real'(case_perf_count_q);
+        cycles_per_thash_equiv = avg_cycles / 4.0;
+        avg_wait_saved = real'(case_wait_saved_sum_q) / real'(case_perf_count_q);
+        avg_irq_saved = real'(case_irq_saved_sum_q) / real'(case_perf_count_q);
+
+        $display("CORE_SMOKE_PERF_SUMMARY mode=%s cases=%0d avg_cycles_per_case=%0.2f avg_status_polls=%0.2f avg_xif_instr=%0.2f avg_bus_rd=%0.2f avg_bus_wr=%0.2f avg_perf_total=%0.2f effective_thash_per_case=4 cycles_per_thash_equiv=%0.2f estimated_speedup_basis=polling_status_to_wait avg_wait_saved_instr=%0.2f avg_irq_saved_instr=%0.2f",
+                 smoke_mode_cfg, case_perf_count_q, avg_cycles,
+                 avg_status_polls, avg_xif_instr, avg_bus_rd, avg_bus_wr,
+                 avg_perf_total, cycles_per_thash_equiv, avg_wait_saved,
+                 avg_irq_saved);
+      end
+    end
+  endtask
 
   function automatic bit bus_random_ready_ok;
     begin
@@ -762,23 +970,133 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      cycle_q              <= 0;
-      instr_fetch_count_q  <= 0;
-      data_read_count_q    <= 0;
-      data_write_count_q   <= 0;
-      xif_issue_count_q    <= 0;
-      xif_accept_count_q   <= 0;
-      xif_result_count_q   <= 0;
+      cycle_q               <= 0;
+      instr_fetch_count_q   <= 0;
+      data_read_count_q     <= 0;
+      data_write_count_q    <= 0;
+      xif_issue_count_q     <= 0;
+      xif_accept_count_q    <= 0;
+      xif_result_count_q    <= 0;
       xif_mem_valid_count_q <= 0;
-      desc_control_count_q <= 0;
-      bus_read_count_q     <= 0;
-      bus_write_count_q    <= 0;
-      time_q               <= 64'd0;
+      desc_control_count_q  <= 0;
+      bus_read_count_q      <= 0;
+      bus_write_count_q     <= 0;
+      time_q                <= 64'd0;
+
+      for (int id = 0; id < XIF_IDS; id++) begin
+        xif_outstanding_q[id]       <= 1'b0;
+        xif_committed_q[id]         <= 1'b0;
+        xif_outstanding_op_q[id]    <= XIF_OP_UNKNOWN;
+        xif_issue_cycle_q[id]       <= 0;
+        xif_commit_cycle_q[id]      <= 0;
+      end
+
+      for (int op = 0; op < XIF_OP_COUNT; op++) begin
+        xif_latency_count_q[op]        <= 0;
+        xif_issue_commit_min_q[op]     <= 32'hffff_ffff;
+        xif_issue_commit_max_q[op]     <= 0;
+        xif_issue_commit_sum_q[op]     <= 0;
+        xif_commit_result_min_q[op]    <= 32'hffff_ffff;
+        xif_commit_result_max_q[op]    <= 0;
+        xif_commit_result_sum_q[op]    <= 0;
+        xif_issue_result_min_q[op]     <= 32'hffff_ffff;
+        xif_issue_result_max_q[op]     <= 0;
+        xif_issue_result_sum_q[op]     <= 0;
+      end
+
+      case_active_q             <= 1'b0;
+      case_done_seen_q          <= 1'b0;
+      case_pass_q               <= 1'b0;
+      case_next_id_q            <= 0;
+      case_active_id_q          <= 0;
+      case_inblocks_q           <= 0;
+      case_start_cycle_q        <= 0;
+      case_done_cycle_q         <= 0;
+      case_xif_count_q          <= 0;
+      case_status_polls_q       <= 0;
+      case_bus_rd_q             <= 0;
+      case_bus_wr_q             <= 0;
+      case_perf_count_q         <= 0;
+      case_fail_count_q         <= 0;
+      case_cycles_sum_q         <= 0;
+      case_status_polls_sum_q   <= 0;
+      case_xif_sum_q            <= 0;
+      case_bus_rd_sum_q         <= 0;
+      case_bus_wr_sum_q         <= 0;
+      case_perf_total_sum_q     <= 0;
+      case_wait_saved_sum_q     <= 0;
+      case_irq_saved_sum_q      <= 0;
+
+      desc_watch_active_q       <= 1'b0;
+      desc_done_prev_q          <= 1'b0;
+      desc_watch_case_id_q      <= 0;
+      desc_watch_start_cycle_q  <= 0;
     end else begin
       logic [31:0] magic_word;
+      logic        xif_issue_fire;
+      logic        xif_accept_fire;
+      logic        xif_commit_fire;
+      logic        xif_result_fire;
+      int unsigned issue_id;
+      int unsigned issue_op;
+      int unsigned commit_id;
+      int unsigned result_id;
+      int unsigned result_op;
+      int unsigned issue_commit_latency;
+      int unsigned commit_result_latency;
+      int unsigned issue_result_latency;
+      int unsigned case_total_cycles;
+      int unsigned case_wait_saved_instr;
+      int unsigned case_irq_saved_instr;
+      real         case_poll_instr_pct;
+
+      xif_issue_fire  = xif.issue_valid && xif.issue_ready;
+      xif_accept_fire = xif_issue_fire && xif.issue_resp.accept;
+      xif_commit_fire = xif.commit_valid;
+      xif_result_fire = xif.result_valid && xif.result_ready;
+      issue_id        = int'(xif.issue_req.id);
+      issue_op        = XIF_OP_UNKNOWN;
+      commit_id       = int'(xif.commit.id);
+      result_id       = int'(xif.result.id);
+      result_op       = XIF_OP_UNKNOWN;
+
+      if (xif.issue_valid) begin
+        issue_op = decode_xif_op(xif.issue_req.instr);
+      end
 
       cycle_q <= cycle_q + 1;
       time_q  <= time_q + 64'd1;
+      desc_done_prev_q <= desc_done;
+
+      if ($isunknown({desc_busy, desc_done, desc_error, desc_status,
+                      instr_valid, instr_ready, instr_resp_valid,
+                      instr_illegal})) begin
+        $fatal(1, "unknown X/Z on descriptor status/result monitor signals cycle=%0d",
+               cycle_q);
+      end
+      if (instr_resp_valid && $isunknown(instr_resp_data)) begin
+        $fatal(1, "unknown X/Z on descriptor response data cycle=%0d", cycle_q);
+      end
+      if ($isunknown({xif.issue_valid, xif.issue_ready, xif.result_valid,
+                      xif.result_ready, xif.commit_valid, xif.mem_valid})) begin
+        $fatal(1, "unknown X/Z on CV-X-IF handshake signals cycle=%0d", cycle_q);
+      end
+      if (xif.issue_valid &&
+          $isunknown({xif.issue_req.instr, xif.issue_req.id,
+                      xif.issue_resp.accept, xif.issue_resp.writeback,
+                      xif.issue_resp.exc})) begin
+        $fatal(1, "unknown X/Z on CV-X-IF issue signals cycle=%0d", cycle_q);
+      end
+      if (xif.commit_valid &&
+          $isunknown({xif.commit.id, xif.commit.commit_kill})) begin
+        $fatal(1, "unknown X/Z on CV-X-IF commit signals cycle=%0d", cycle_q);
+      end
+      if (xif.result_valid &&
+          $isunknown({xif.result.id, xif.result.data, xif.result.rd,
+                      xif.result.we, xif.result.exc, xif.result.err,
+                      xif.result.dbg})) begin
+        $fatal(1, "unknown X/Z on CV-X-IF result signals cycle=%0d", cycle_q);
+      end
 
       if (instr_req && instr_gnt) begin
         instr_fetch_count_q <= instr_fetch_count_q + 1;
@@ -805,13 +1123,206 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
       if (bus_req_valid && bus_req_ready) begin
         if (bus_req_we) begin
           bus_write_count_q <= bus_write_count_q + 1;
+          if (case_active_q) begin
+            case_bus_wr_q <= case_bus_wr_q + 1;
+          end
         end else begin
           bus_read_count_q <= bus_read_count_q + 1;
+          if (case_active_q) begin
+            case_bus_rd_q <= case_bus_rd_q + 1;
+          end
         end
       end
       if (xif.mem_valid) begin
         xif_mem_valid_count_q <= xif_mem_valid_count_q + 1;
         $fatal(1, "CV-X-IF memory interface was used; descriptor bulk data must stay on memory-side path");
+      end
+
+      if (xif_accept_fire) begin
+        if (issue_op == XIF_OP_UNKNOWN) begin
+          $fatal(1, "accepted unknown CV-X-IF instruction instr=0x%08x cycle=%0d",
+                 xif.issue_req.instr, cycle_q);
+        end
+        if (xif_outstanding_q[issue_id]) begin
+          $fatal(1, "accepted CV-X-IF id reused before result id=%0d cycle=%0d",
+                 issue_id, cycle_q);
+        end
+        xif_outstanding_q[issue_id]    <= 1'b1;
+        xif_committed_q[issue_id]      <= 1'b0;
+        xif_outstanding_op_q[issue_id] <= issue_op;
+        xif_issue_cycle_q[issue_id]    <= cycle_q;
+        xif_commit_cycle_q[issue_id]   <= 0;
+
+        if (!case_active_q) begin
+          case_active_q       <= 1'b1;
+          case_done_seen_q    <= 1'b0;
+          case_pass_q         <= 1'b0;
+          case_active_id_q    <= case_next_id_q;
+          case_next_id_q      <= case_next_id_q + 1;
+          case_inblocks_q     <= 0;
+          case_start_cycle_q  <= 0;
+          case_done_cycle_q   <= 0;
+          case_xif_count_q    <= 1;
+          case_status_polls_q <= (issue_op == XIF_OP_STATUS) ? 1 : 0;
+          case_bus_rd_q       <= 0;
+          case_bus_wr_q       <= 0;
+        end else begin
+          case_xif_count_q <= case_xif_count_q + 1;
+          if (issue_op == XIF_OP_STATUS) begin
+            case_status_polls_q <= case_status_polls_q + 1;
+          end
+        end
+      end
+
+      if (xif_commit_fire) begin
+        if (!xif_outstanding_q[commit_id]) begin
+          $fatal(1, "CV-X-IF commit without accepted issue id=%0d cycle=%0d",
+                 commit_id, cycle_q);
+        end
+        if (xif_committed_q[commit_id]) begin
+          $fatal(1, "duplicate CV-X-IF commit id=%0d cycle=%0d",
+                 commit_id, cycle_q);
+        end
+        if (xif.commit.commit_kill) begin
+          $fatal(1, "accepted CV-X-IF instruction was commit-killed id=%0d cycle=%0d",
+                 commit_id, cycle_q);
+        end
+        xif_committed_q[commit_id]    <= 1'b1;
+        xif_commit_cycle_q[commit_id] <= cycle_q;
+      end
+
+      if (xif_result_fire) begin
+        if (!xif_outstanding_q[result_id]) begin
+          $fatal(1, "CV-X-IF result without accepted issue id=%0d cycle=%0d",
+                 result_id, cycle_q);
+        end
+        if (!xif_committed_q[result_id]) begin
+          $fatal(1, "CV-X-IF result before commit id=%0d cycle=%0d",
+                 result_id, cycle_q);
+        end
+
+        result_op = xif_outstanding_op_q[result_id];
+        issue_commit_latency = xif_commit_cycle_q[result_id] -
+                               xif_issue_cycle_q[result_id];
+        commit_result_latency = cycle_q - xif_commit_cycle_q[result_id];
+        issue_result_latency = cycle_q - xif_issue_cycle_q[result_id];
+
+        if (result_op < XIF_OP_COUNT) begin
+          xif_latency_count_q[result_op] <= xif_latency_count_q[result_op] + 1;
+          xif_issue_commit_sum_q[result_op] <=
+              xif_issue_commit_sum_q[result_op] + issue_commit_latency;
+          xif_commit_result_sum_q[result_op] <=
+              xif_commit_result_sum_q[result_op] + commit_result_latency;
+          xif_issue_result_sum_q[result_op] <=
+              xif_issue_result_sum_q[result_op] + issue_result_latency;
+
+          if (issue_commit_latency < xif_issue_commit_min_q[result_op]) begin
+            xif_issue_commit_min_q[result_op] <= issue_commit_latency;
+          end
+          if (issue_commit_latency > xif_issue_commit_max_q[result_op]) begin
+            xif_issue_commit_max_q[result_op] <= issue_commit_latency;
+          end
+          if (commit_result_latency < xif_commit_result_min_q[result_op]) begin
+            xif_commit_result_min_q[result_op] <= commit_result_latency;
+          end
+          if (commit_result_latency > xif_commit_result_max_q[result_op]) begin
+            xif_commit_result_max_q[result_op] <= commit_result_latency;
+          end
+          if (issue_result_latency < xif_issue_result_min_q[result_op]) begin
+            xif_issue_result_min_q[result_op] <= issue_result_latency;
+          end
+          if (issue_result_latency > xif_issue_result_max_q[result_op]) begin
+            xif_issue_result_max_q[result_op] <= issue_result_latency;
+          end
+        end
+
+        if ((result_op == XIF_OP_STATUS) && case_active_q &&
+            !case_done_seen_q && xif.result.data[STATUS_DONE_BIT]) begin
+          case_done_seen_q  <= 1'b1;
+          case_done_cycle_q <= cycle_q;
+          case_pass_q       <= !xif.result.data[STATUS_ERROR_BIT];
+        end
+
+        if ((result_op == XIF_OP_CLEAR) && case_active_q && case_done_seen_q) begin
+          case_total_cycles = (case_done_cycle_q >= case_start_cycle_q) ?
+                              (case_done_cycle_q - case_start_cycle_q) : 0;
+          case_wait_saved_instr = (case_status_polls_q > 0) ?
+                                  (case_status_polls_q - 1) : 0;
+          case_irq_saved_instr = case_status_polls_q;
+          case_poll_instr_pct = (case_xif_count_q == 0) ? 0.0 :
+                                (100.0 * real'(case_status_polls_q) /
+                                 real'(case_xif_count_q));
+
+          $display("CASE_PERF id=%0d inblocks=%0d start_cycle=%0d done_cycle=%0d cycles=%0d polls=%0d xif=%0d bus_rd=%0d bus_wr=%0d load=%0d core=%0d store=%0d total=%0d pass=%0d",
+                   case_active_id_q, case_inblocks_q, case_start_cycle_q,
+                   case_done_cycle_q, case_total_cycles, case_status_polls_q,
+                   case_xif_count_q, case_bus_rd_q, case_bus_wr_q,
+                   perf_load_cycles, perf_core_cycles, perf_store_cycles,
+                   perf_total_cycles, case_pass_q);
+          $display("POLL_PERF id=%0d status=%0d start_to_done_cycles=%0d poll_instr_pct=%0.1f wait_saved_instr=%0d irq_saved_instr=%0d",
+                   case_active_id_q, case_status_polls_q, case_total_cycles,
+                   case_poll_instr_pct, case_wait_saved_instr,
+                   case_irq_saved_instr);
+
+          case_perf_count_q       <= case_perf_count_q + 1;
+          if (!case_pass_q) begin
+            case_fail_count_q <= case_fail_count_q + 1;
+          end
+          case_cycles_sum_q       <= case_cycles_sum_q + case_total_cycles;
+          case_status_polls_sum_q <= case_status_polls_sum_q + case_status_polls_q;
+          case_xif_sum_q          <= case_xif_sum_q + case_xif_count_q;
+          case_bus_rd_sum_q       <= case_bus_rd_sum_q + case_bus_rd_q;
+          case_bus_wr_sum_q       <= case_bus_wr_sum_q + case_bus_wr_q;
+          case_perf_total_sum_q   <= case_perf_total_sum_q + perf_total_cycles;
+          case_wait_saved_sum_q   <= case_wait_saved_sum_q + case_wait_saved_instr;
+          case_irq_saved_sum_q    <= case_irq_saved_sum_q + case_irq_saved_instr;
+
+          case_active_q           <= 1'b0;
+          case_done_seen_q        <= 1'b0;
+          case_pass_q             <= 1'b0;
+          case_xif_count_q        <= 0;
+          case_status_polls_q     <= 0;
+          case_bus_rd_q           <= 0;
+          case_bus_wr_q           <= 0;
+        end
+
+        xif_outstanding_q[result_id]    <= 1'b0;
+        xif_committed_q[result_id]      <= 1'b0;
+        xif_outstanding_op_q[result_id] <= XIF_OP_UNKNOWN;
+        xif_issue_cycle_q[result_id]    <= 0;
+        xif_commit_cycle_q[result_id]   <= 0;
+      end
+
+      if (desc_start) begin
+        if (desc_watch_active_q) begin
+          $fatal(1, "descriptor start observed while prior descriptor still active case_id=%0d cycle=%0d",
+                 desc_watch_case_id_q, cycle_q);
+        end
+        desc_watch_active_q      <= 1'b1;
+        desc_watch_start_cycle_q <= cycle_q;
+        desc_watch_case_id_q     <= case_active_id_q;
+        case_start_cycle_q       <= cycle_q;
+        case_inblocks_q          <= int'(read_word(desc_addr + 32'd4) & 32'h3);
+      end
+
+      if (desc_done && !desc_done_prev_q) begin
+        desc_watch_active_q <= 1'b0;
+      end
+
+      if (desc_watch_active_q &&
+          ((cycle_q - desc_watch_start_cycle_q) > DESC_DONE_TIMEOUT_CYCLES)) begin
+        $fatal(1, "descriptor timeout case_id=%0d start_cycle=%0d cycle=%0d status=0x%08x",
+               desc_watch_case_id_q, desc_watch_start_cycle_q, cycle_q,
+               desc_status);
+      end
+
+      for (int id = 0; id < XIF_IDS; id++) begin
+        if (xif_outstanding_q[id] &&
+            ((cycle_q - xif_issue_cycle_q[id]) > XIF_RESULT_TIMEOUT_CYCLES)) begin
+          $fatal(1, "CV-X-IF accepted instruction timeout id=%0d type=%s issue_cycle=%0d cycle=%0d",
+                 id, xif_op_name(xif_outstanding_op_q[id]),
+                 xif_issue_cycle_q[id], cycle_q);
+        end
       end
 
       magic_word = read_word(MAGIC_ADDR);
@@ -838,6 +1349,39 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
         if (desc_control_count_q < 8) begin
           $fatal(1, "PASS magic observed before descriptor controls count=%0d",
                  desc_control_count_q);
+        end
+        if (xif_issue_count_q != xif_result_count_q) begin
+          $fatal(1, "PASS magic observed with mismatched XIF issue/result counts issue=%0d result=%0d",
+                 xif_issue_count_q, xif_result_count_q);
+        end
+        if (xif_accept_count_q != xif_result_count_q) begin
+          $fatal(1, "PASS magic observed with mismatched XIF accept/result counts accept=%0d result=%0d",
+                 xif_accept_count_q, xif_result_count_q);
+        end
+        for (int id = 0; id < XIF_IDS; id++) begin
+          if (xif_outstanding_q[id]) begin
+            $fatal(1, "PASS magic observed with outstanding XIF id=%0d type=%s issue_cycle=%0d",
+                   id, xif_op_name(xif_outstanding_op_q[id]),
+                   xif_issue_cycle_q[id]);
+          end
+        end
+        if (magic_word == MAGIC_PASS) begin
+          if (case_active_q) begin
+            $fatal(1, "PASS magic observed while case window is still active id=%0d",
+                   case_active_id_q);
+          end
+          if (case_perf_count_q != cases_passed) begin
+            $fatal(1, "PASS magic observed with mismatched CASE_PERF count=%0d cases_passed=%0d",
+                   case_perf_count_q, cases_passed);
+          end
+          if (case_fail_count_q != 0) begin
+            $fatal(1, "PASS magic observed with failed CASE_PERF entries=%0d",
+                   case_fail_count_q);
+          end
+          print_xif_latency_summary();
+          print_core_smoke_perf_summary();
+        end else begin
+          print_xif_latency_summary();
         end
         if (magic_word == MAGIC_PASS) begin
           $display("PASS cv32e40x_spx_core_smoke read_latency=%0d write_latency=%0d req_ready_pct=%0d cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
