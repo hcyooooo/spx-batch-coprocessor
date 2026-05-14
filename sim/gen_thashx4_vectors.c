@@ -18,6 +18,10 @@
 #define KECCAK_VECTOR_CASES 128u
 #define THASH_CASES_PER_INBLOCKS 100u
 #define WOTS_CHAIN_CASES 5u
+#define WOTS_CHAIN_MIXED_FIXED_CASES 5u
+#define WOTS_CHAIN_MIXED_RANDOM_CASES 32u
+#define WOTS_CHAIN_MIXED_CASES \
+    (WOTS_CHAIN_MIXED_FIXED_CASES + WOTS_CHAIN_MIXED_RANDOM_CASES)
 
 static uint64_t prng_next(uint64_t *state)
 {
@@ -62,6 +66,17 @@ static void print_state_hex(FILE *fp, const uint64_t state[KECCAK_WORDS])
         const size_t idx = KECCAK_WORDS - 1u - i;
         fprintf(fp, "%016" PRIx64, state[idx]);
     }
+}
+
+static uint32_t pack_lane_bytes(const uint32_t values[SPX_WOTS_CHAINX4_LANES])
+{
+    uint32_t packed = 0;
+
+    for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+        packed |= (values[lane] & 0xffu) << (8u * lane);
+    }
+
+    return packed;
 }
 
 static void squeeze_spx_n(uint8_t out[SPX_N], const uint64_t state[KECCAK_WORDS])
@@ -291,6 +306,103 @@ static void write_wots_chain_vectors(const char *outdir)
     fclose(fp);
 }
 
+static void write_wots_chain_mixed_vectors(const char *outdir)
+{
+    static const unsigned int fixed_num_steps[WOTS_CHAIN_MIXED_FIXED_CASES][SPX_WOTS_CHAINX4_LANES] = {
+        {1u, 1u, 1u, 1u},
+        {1u, 2u, 3u, 4u},
+        {0u, 1u, 8u, 15u},
+        {15u, 0u, 0u, 0u},
+        {3u, 7u, 11u, 15u}
+    };
+    static const unsigned int fixed_start_steps[WOTS_CHAIN_MIXED_FIXED_CASES][SPX_WOTS_CHAINX4_LANES] = {
+        {0u, 0u, 0u, 0u},
+        {0u, 1u, 2u, 3u},
+        {0u, 0u, 4u, 1u},
+        {1u, 0u, 0u, 0u},
+        {0u, 2u, 4u, 1u}
+    };
+    FILE *fp = open_output(outdir, "wots_chainx4_mixed_vectors.hex");
+    uint64_t seed = 0x83f58a17d6c4b201ULL;
+
+    fprintf(fp, "%u\n", WOTS_CHAIN_MIXED_CASES);
+
+    for (size_t case_id = 0; case_id < WOTS_CHAIN_MIXED_CASES; case_id++) {
+        uint8_t pub_seed[SPX_WOTS_CHAINX4_N];
+        uint8_t addr[SPX_WOTS_CHAINX4_LANES][SPX_WOTS_CHAINX4_ADDR_BYTES];
+        uint8_t input[SPX_WOTS_CHAINX4_LANES][SPX_WOTS_CHAINX4_N];
+        uint8_t output[SPX_WOTS_CHAINX4_LANES][SPX_WOTS_CHAINX4_N];
+        uint32_t start_steps[SPX_WOTS_CHAINX4_LANES];
+        uint32_t num_steps[SPX_WOTS_CHAINX4_LANES];
+        spx_wots_chainx4_stats_t stats;
+
+        if (case_id < WOTS_CHAIN_MIXED_FIXED_CASES) {
+            for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+                start_steps[lane] = fixed_start_steps[case_id][lane];
+                num_steps[lane] = fixed_num_steps[case_id][lane];
+            }
+        } else {
+            uint32_t useful_lane_ops = 0;
+
+            for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+                num_steps[lane] = (uint32_t)(prng_next(&seed) % SPX_WOTS_CHAINX4_W);
+                start_steps[lane] =
+                    (uint32_t)(prng_next(&seed) %
+                               (SPX_WOTS_CHAINX4_W - num_steps[lane] + 1u));
+                useful_lane_ops += num_steps[lane];
+            }
+            if (useful_lane_ops == 0u) {
+                num_steps[0] = 1u;
+                start_steps[0] = 0u;
+            }
+        }
+
+        fill_bytes(pub_seed, sizeof(pub_seed), &seed);
+        for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+            fill_bytes(addr[lane], sizeof(addr[lane]), &seed);
+            fill_bytes(input[lane], sizeof(input[lane]), &seed);
+            addr[lane][27] = (uint8_t)(0x80u + case_id * SPX_WOTS_CHAINX4_LANES + lane);
+            addr[lane][SPX_WOTS_CHAINX4_SHAKE_HASH_ADDR_OFFSET] = 0x5au;
+            input[lane][0] = (uint8_t)(0x40u + 0x09u * case_id + 0x17u * lane);
+        }
+
+        if (spx_wots_chainx4_mixed_compare_scalar(input, pub_seed, addr,
+                                                  start_steps, num_steps,
+                                                  &stats) != 0) {
+            fprintf(stderr,
+                    "WOTS mixed chain x4 scalar comparison failed at case %zu\n",
+                    case_id);
+            exit(1);
+        }
+
+        if (spx_wots_chainx4_mixed_model(output, input, pub_seed, addr,
+                                         start_steps, num_steps, &stats) != 0) {
+            fprintf(stderr, "WOTS mixed chain x4 model rejected case %zu\n",
+                    case_id);
+            exit(1);
+        }
+
+        fprintf(fp, "%zu %08" PRIx32 " %08" PRIx32 " ",
+                case_id, pack_lane_bytes(start_steps), pack_lane_bytes(num_steps));
+        print_bytes_hex(fp, pub_seed, sizeof(pub_seed));
+        fputc(' ', fp);
+        for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+            print_bytes_hex(fp, addr[lane], sizeof(addr[lane]));
+            fputc(' ', fp);
+        }
+        for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+            print_bytes_hex(fp, input[lane], sizeof(input[lane]));
+            fputc(' ', fp);
+        }
+        for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+            print_bytes_hex(fp, output[lane], sizeof(output[lane]));
+            fputc(lane + 1u == SPX_WOTS_CHAINX4_LANES ? '\n' : ' ', fp);
+        }
+    }
+
+    fclose(fp);
+}
+
 int main(int argc, char **argv)
 {
     const char *outdir = (argc > 1) ? argv[1] : "sim/vectors";
@@ -303,8 +415,9 @@ int main(int argc, char **argv)
     write_keccak_vectors(outdir);
     write_thash_vectors(outdir);
     write_wots_chain_vectors(outdir);
+    write_wots_chain_mixed_vectors(outdir);
 
-    printf("Generated Keccak, thashx4, and WOTS chain x4 vectors in %s\n",
+    printf("Generated Keccak, thashx4, WOTS chain x4, and mixed WOTS vectors in %s\n",
            outdir);
     return 0;
 }

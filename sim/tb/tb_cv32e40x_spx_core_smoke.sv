@@ -36,6 +36,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   localparam int WOTS_VECTOR_CASE_WORDS   = 70;
   localparam int WOTS_CASE_START_STEP_WORD = 0;
   localparam int WOTS_CASE_NUM_STEPS_WORD  = 1;
+  localparam int WOTS_CASE_START_STEPS_PACKED_WORD = 0;
+  localparam int WOTS_CASE_NUM_STEPS_PACKED_WORD   = 1;
   localparam int WOTS_CASE_PUB_SEED_WORD   = 2;
   localparam int WOTS_CASE_ADDR_WORD       = 6;
   localparam int WOTS_CASE_INPUT_WORD      = 38;
@@ -213,6 +215,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   int unsigned case_inblocks_q;
   int unsigned case_op_type_q;
   int unsigned case_num_steps_q;
+  int unsigned case_useful_lane_ops_q;
+  int unsigned case_physical_lane_ops_q;
   int unsigned case_start_cycle_q;
   int unsigned case_done_cycle_q;
   int unsigned case_xif_count_q;
@@ -238,6 +242,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   longint unsigned wots_bus_rd_sum_q [0:15];
   longint unsigned wots_bus_wr_sum_q [0:15];
   longint unsigned wots_perf_total_sum_q [0:15];
+  longint unsigned wots_useful_lane_ops_sum_q [0:15];
+  longint unsigned wots_physical_lane_ops_sum_q [0:15];
 
   logic        desc_watch_active_q;
   logic        desc_done_prev_q;
@@ -540,22 +546,29 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
     real avg_bus_rd;
     real avg_bus_wr;
     real avg_perf_total;
+    real avg_useful;
+    real avg_physical;
+    real avg_utilization;
     real speedup;
-    int baseline_cycles;
     begin
       if (!wots_chain_smoke_cfg) begin
         return;
       end
 
       $display("WOTS_CHAIN_CORE_PERF_TABLE mode=%s", smoke_mode_cfg);
-      $display("num_steps  baseline_descriptor_thashx4_cycles  wots_chain_core_cycles  speedup  xif_instr  status_polls  bus_rd  bus_wr  desc_perf_total");
-      $display("--------------------------------------------------------------------------------------------------------------------------------");
+      $display("max_steps  avg_useful_lane_ops  avg_physical_lane_ops  lane_utilization  scalar_descriptor_cycles  wots_chain_core_cycles  speedup  xif_instr  status_polls  bus_rd  bus_wr  desc_perf_total");
+      $display("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
 
       for (int steps = 1; steps < 16; steps++) begin
         if (wots_perf_count_q[steps] != 0) begin
-          baseline_cycles = 57 * steps;
           avg_cycles = real'(wots_cycles_sum_q[steps]) /
                        real'(wots_perf_count_q[steps]);
+          avg_useful = real'(wots_useful_lane_ops_sum_q[steps]) /
+                       real'(wots_perf_count_q[steps]);
+          avg_physical = real'(wots_physical_lane_ops_sum_q[steps]) /
+                         real'(wots_perf_count_q[steps]);
+          avg_utilization = (avg_physical == 0.0) ? 0.0 :
+                            (avg_useful / avg_physical);
           avg_xif = real'(wots_xif_sum_q[steps]) /
                     real'(wots_perf_count_q[steps]);
           avg_polls = real'(wots_status_polls_sum_q[steps]) /
@@ -566,10 +579,11 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
                        real'(wots_perf_count_q[steps]);
           avg_perf_total = real'(wots_perf_total_sum_q[steps]) /
                            real'(wots_perf_count_q[steps]);
-          speedup = real'(baseline_cycles) / avg_cycles;
+          speedup = (57.0 * avg_useful) / avg_cycles;
 
-          $display("%9d %34d %23.2f %8.2fx %10.2f %13.2f %7.2f %7.2f %15.2f",
-                   steps, baseline_cycles, avg_cycles, speedup, avg_xif,
+          $display("%9d %20.2f %22.2f %17.2f %24.2f %23.2f %8.2fx %10.2f %13.2f %7.2f %7.2f %15.2f",
+                   steps, avg_useful, avg_physical, avg_utilization,
+                   57.0 * avg_useful, avg_cycles, speedup, avg_xif,
                    avg_polls, avg_bus_rd, avg_bus_wr, avg_perf_total);
         end
       end
@@ -585,6 +599,40 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
       end else begin
         bus_random_ready_ok = (int'(bus_rng_q % 100) < bus_req_ready_pct_cfg);
       end
+    end
+  endfunction
+
+  function automatic logic [31:0] pack_uniform_lane_bytes(input int value);
+    begin
+      pack_uniform_lane_bytes = {8'(value), 8'(value), 8'(value), 8'(value)};
+    end
+  endfunction
+
+  function automatic int lane_byte(input logic [31:0] packed_value, input int lane);
+    begin
+      lane_byte = int'(packed_value[8 * lane +: 8]);
+    end
+  endfunction
+
+  function automatic int useful_lane_ops(input logic [31:0] packed_steps);
+    begin
+      useful_lane_ops = lane_byte(packed_steps, 0) +
+                        lane_byte(packed_steps, 1) +
+                        lane_byte(packed_steps, 2) +
+                        lane_byte(packed_steps, 3);
+    end
+  endfunction
+
+  function automatic int max_lane_steps(input logic [31:0] packed_steps);
+    int max_steps;
+    begin
+      max_steps = 0;
+      for (int lane = 0; lane < 4; lane++) begin
+        if (lane_byte(packed_steps, lane) > max_steps) begin
+          max_steps = lane_byte(packed_steps, lane);
+        end
+      end
+      max_lane_steps = max_steps;
     end
   endfunction
 
@@ -663,8 +711,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 
   task automatic write_wots_vector_case(
       input int case_index,
-      input int start_step,
-      input int num_steps,
+      input logic [31:0] start_steps_packed,
+      input logic [31:0] num_steps_packed,
       input logic [127:0] pub_seed,
       input logic [255:0] addr0,
       input logic [255:0] addr1,
@@ -682,8 +730,10 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
     int base_word;
     begin
       base_word = WOTS_VECTOR_HEADER_WORDS + case_index * WOTS_VECTOR_CASE_WORDS;
-      write_table_word(base_word + WOTS_CASE_START_STEP_WORD, 32'(start_step));
-      write_table_word(base_word + WOTS_CASE_NUM_STEPS_WORD, 32'(num_steps));
+      write_table_word(base_word + WOTS_CASE_START_STEPS_PACKED_WORD,
+                       start_steps_packed);
+      write_table_word(base_word + WOTS_CASE_NUM_STEPS_PACKED_WORD,
+                       num_steps_packed);
 
       for (int word = 0; word < 4; word++) begin
         write_table_word(base_word + WOTS_CASE_PUB_SEED_WORD + word,
@@ -721,11 +771,16 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 
   task automatic load_wots_vector_table(input string vectors_path);
     int fd;
+    int mixed_fd;
     int rc;
     int num_cases;
+    int mixed_cases;
     int case_id_file;
     int start_step_i;
     int num_steps_i;
+    logic [31:0] start_steps_packed;
+    logic [31:0] num_steps_packed;
+    string mixed_vectors_path;
     logic [127:0] pub_seed;
     logic [255:0] addr0;
     logic [255:0] addr1;
@@ -750,11 +805,24 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
         $fatal(1, "failed to read WOTS vector count from %s", vectors_path);
       end
 
+      if (!$value$plusargs("WOTS_MIXED_VECTORS=%s", mixed_vectors_path)) begin
+        mixed_vectors_path = "vectors/wots_chainx4_mixed_vectors.hex";
+      end
+      mixed_fd = $fopen(mixed_vectors_path, "r");
+      if (mixed_fd == 0) begin
+        $fatal(1, "failed to open %s", mixed_vectors_path);
+      end
+      rc = $fscanf(mixed_fd, "%d", mixed_cases);
+      if (rc != 1) begin
+        $fatal(1, "failed to read WOTS mixed vector count from %s",
+               mixed_vectors_path);
+      end
+
       write_table_word(0, WOTS_VECTOR_TABLE_MAGIC);
-      write_table_word(1, 32'(num_cases));
+      write_table_word(1, 32'(num_cases + mixed_cases));
       write_table_word(2, 32'(WOTS_VECTOR_CASE_WORDS));
       write_table_word(3, 32'd0);
-      expected_case_count_cfg = num_cases;
+      expected_case_count_cfg = num_cases + mixed_cases;
 
       for (int case_id = 0; case_id < num_cases; case_id++) begin
         rc = $fscanf(fd, "%d %d %d %h %h %h %h %h %h %h %h %h %h %h %h %h",
@@ -770,15 +838,40 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
           $fatal(1, "WOTS case id mismatch expected=%0d got=%0d",
                  case_id, case_id_file);
         end
-        write_wots_vector_case(case_id, start_step_i, num_steps_i,
+        write_wots_vector_case(case_id,
+                               pack_uniform_lane_bytes(start_step_i),
+                               pack_uniform_lane_bytes(num_steps_i),
+                               pub_seed, addr0, addr1, addr2, addr3,
+                               in0, in1, in2, in3,
+                               exp0, exp1, exp2, exp3);
+      end
+
+      for (int mixed_case_id = 0; mixed_case_id < mixed_cases; mixed_case_id++) begin
+        rc = $fscanf(mixed_fd, "%d %h %h %h %h %h %h %h %h %h %h %h %h %h %h %h",
+                     case_id_file, start_steps_packed, num_steps_packed, pub_seed,
+                     addr0, addr1, addr2, addr3,
+                     in0, in1, in2, in3,
+                     exp0, exp1, exp2, exp3);
+        if (rc != 16) begin
+          $fatal(1, "failed to read WOTS mixed case %0d from %s",
+                 mixed_case_id, mixed_vectors_path);
+        end
+        if (case_id_file != mixed_case_id) begin
+          $fatal(1, "WOTS mixed case id mismatch expected=%0d got=%0d",
+                 mixed_case_id, case_id_file);
+        end
+        write_wots_vector_case(num_cases + mixed_case_id,
+                               start_steps_packed, num_steps_packed,
                                pub_seed, addr0, addr1, addr2, addr3,
                                in0, in1, in2, in3,
                                exp0, exp1, exp2, exp3);
       end
 
       $fclose(fd);
-      $display("Loaded CV32E40X WOTS chain vector table: cases=%0d case_words=%0d",
-               num_cases, WOTS_VECTOR_CASE_WORDS);
+      $fclose(mixed_fd);
+      $display("Loaded CV32E40X WOTS chain vector table: uniform=%0d mixed=%0d total=%0d case_words=%0d",
+               num_cases, mixed_cases, num_cases + mixed_cases,
+               WOTS_VECTOR_CASE_WORDS);
     end
   endtask
 
@@ -1216,6 +1309,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 	      case_inblocks_q           <= 0;
 	      case_op_type_q            <= 0;
 	      case_num_steps_q          <= 0;
+      case_useful_lane_ops_q    <= 0;
+      case_physical_lane_ops_q  <= 0;
 	      case_start_cycle_q        <= 0;
       case_done_cycle_q         <= 0;
       case_xif_count_q          <= 0;
@@ -1246,6 +1341,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 	        wots_bus_rd_sum_q[steps]        <= 0;
 	        wots_bus_wr_sum_q[steps]        <= 0;
 	        wots_perf_total_sum_q[steps]    <= 0;
+        wots_useful_lane_ops_sum_q[steps]   <= 0;
+        wots_physical_lane_ops_sum_q[steps] <= 0;
 	      end
 	    end else begin
 	      logic [31:0] magic_word;
@@ -1266,6 +1363,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
       int unsigned case_total_cycles;
       int unsigned case_wait_saved_instr;
       int unsigned case_irq_saved_instr;
+      int unsigned decoded_wots_max_steps;
+      int unsigned decoded_wots_useful_ops;
       real         case_poll_instr_pct;
 
       xif_issue_fire  = xif.issue_valid && xif.issue_ready;
@@ -1380,6 +1479,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 	          case_inblocks_q     <= 0;
 	          case_op_type_q      <= 0;
 	          case_num_steps_q    <= 0;
+          case_useful_lane_ops_q   <= 0;
+          case_physical_lane_ops_q <= 0;
 	          case_start_cycle_q  <= 0;
           case_done_cycle_q   <= 0;
           case_xif_count_q    <= 1;
@@ -1473,9 +1574,11 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
                                 (100.0 * real'(case_status_polls_q) /
                                  real'(case_xif_count_q));
 
-	          $display("CASE_PERF id=%0d op_type=%0d inblocks=%0d num_steps=%0d start_cycle=%0d done_cycle=%0d cycles=%0d polls=%0d xif=%0d bus_rd=%0d bus_wr=%0d load=%0d core=%0d store=%0d total=%0d pass=%0d",
+	          $display("CASE_PERF id=%0d op_type=%0d inblocks=%0d num_steps=%0d useful_lane_ops=%0d physical_lane_ops=%0d start_cycle=%0d done_cycle=%0d cycles=%0d polls=%0d xif=%0d bus_rd=%0d bus_wr=%0d load=%0d core=%0d store=%0d total=%0d pass=%0d",
 	                   case_active_id_q, case_op_type_q, case_inblocks_q,
-	                   case_num_steps_q, case_start_cycle_q, case_done_cycle_q,
+	                   case_num_steps_q, case_useful_lane_ops_q,
+	                   case_physical_lane_ops_q,
+	                   case_start_cycle_q, case_done_cycle_q,
 	                   case_total_cycles, case_status_polls_q, case_xif_count_q,
 	                   case_bus_rd_q, case_bus_wr_q, perf_load_cycles,
 	                   perf_core_cycles, perf_store_cycles, perf_total_cycles,
@@ -1500,8 +1603,13 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 	                wots_bus_wr_sum_q[case_num_steps_q] + case_bus_wr_q;
 	            wots_perf_total_sum_q[case_num_steps_q] <=
 	                wots_perf_total_sum_q[case_num_steps_q] + perf_total_cycles;
-	            $display("WOTS_CHAIN_CORE_PERF num_steps=%0d cycles=%0d xif=%0d status_polls=%0d bus_rd=%0d bus_wr=%0d desc_perf_total=%0d",
-	                     case_num_steps_q, case_total_cycles, case_xif_count_q,
+            wots_useful_lane_ops_sum_q[case_num_steps_q] <=
+                wots_useful_lane_ops_sum_q[case_num_steps_q] + case_useful_lane_ops_q;
+            wots_physical_lane_ops_sum_q[case_num_steps_q] <=
+                wots_physical_lane_ops_sum_q[case_num_steps_q] + case_physical_lane_ops_q;
+	            $display("WOTS_CHAIN_CORE_PERF max_steps=%0d useful_lane_ops=%0d physical_lane_ops=%0d cycles=%0d xif=%0d status_polls=%0d bus_rd=%0d bus_wr=%0d desc_perf_total=%0d",
+	                     case_num_steps_q, case_useful_lane_ops_q,
+	                     case_physical_lane_ops_q, case_total_cycles, case_xif_count_q,
 	                     case_status_polls_q, case_bus_rd_q, case_bus_wr_q,
 	                     perf_total_cycles);
 	          end
@@ -1524,6 +1632,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 	          case_pass_q             <= 1'b0;
 	          case_op_type_q          <= 0;
 	          case_num_steps_q        <= 0;
+          case_useful_lane_ops_q  <= 0;
+          case_physical_lane_ops_q <= 0;
 	          case_xif_count_q        <= 0;
           case_status_polls_q     <= 0;
           case_bus_rd_q           <= 0;
@@ -1551,8 +1661,19 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 	        case_inblocks_q          <= int'(desc_config_word & 32'h3);
 	        case_op_type_q           <= int'((desc_config_word >> DESC_CONFIG_OP_TYPE_LSB) &
 	                                         32'hff);
-	        case_num_steps_q         <= int'((desc_chain_ctrl_word >>
-	                                         DESC_CHAIN_NUM_STEPS_LSB) & 32'hff);
+        if (((desc_config_word >> DESC_CONFIG_OP_TYPE_LSB) & 32'hff) == 32'h2) begin
+          decoded_wots_max_steps = max_lane_steps(desc_chain_ctrl_word);
+          decoded_wots_useful_ops = useful_lane_ops(desc_chain_ctrl_word);
+          case_num_steps_q <= decoded_wots_max_steps;
+          case_useful_lane_ops_q <= decoded_wots_useful_ops;
+          case_physical_lane_ops_q <= decoded_wots_max_steps * 4;
+        end else begin
+          decoded_wots_max_steps =
+              int'((desc_chain_ctrl_word >> DESC_CHAIN_NUM_STEPS_LSB) & 32'hff);
+          case_num_steps_q <= decoded_wots_max_steps;
+          case_useful_lane_ops_q <= decoded_wots_max_steps * 4;
+          case_physical_lane_ops_q <= decoded_wots_max_steps * 4;
+        end
 	      end
 
       if (desc_done && !desc_done_prev_q) begin

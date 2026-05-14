@@ -42,6 +42,7 @@ module spx_descriptor_adapter #(
   localparam int DESC_ADDR_BASE_WORD    = 3;
   localparam int DESC_INPUT_BASE_WORD   = 4;
   localparam int DESC_OUTPUT_BASE_WORD  = 5;
+  localparam int DESC_MIXED_START_WORD  = 6;
   localparam int DESC_CHAIN_CTRL_WORD   = 7;
 
   localparam int FLAG_INLINE_PUB_SEED_BIT = 0;
@@ -55,6 +56,7 @@ module spx_descriptor_adapter #(
 
   localparam logic [7:0] OP_TYPE_THASHX4       = 8'h00;
   localparam logic [7:0] OP_TYPE_WOTS_CHAINX4  = 8'h01;
+  localparam logic [7:0] OP_TYPE_WOTS_CHAINX4_MIXED = 8'h02;
 
   localparam int CHAIN_CTRL_START_STEP_LSB = 0;
   localparam int CHAIN_CTRL_NUM_STEPS_LSB  = 8;
@@ -105,6 +107,8 @@ module spx_descriptor_adapter #(
   logic [7:0]  op_type_q;
   logic [7:0]  start_step_q;
   logic [7:0]  num_steps_q;
+  logic [31:0] start_steps_packed_q;
+  logic [31:0] num_steps_packed_q;
   logic        inline_pub_seed_q;
   logic        busy_q;
   logic        done_q;
@@ -119,7 +123,9 @@ module spx_descriptor_adapter #(
   logic        common_config_ok;
   logic        thash_config_ok;
   logic        wots_config_ok;
-  logic        wots_chain_window_ok;
+  logic        wots_uniform_chain_window_ok;
+  logic        wots_mixed_chain_window_ok;
+  logic        wots_op_selected;
   logic        pointers_aligned;
   logic        descriptor_aligned;
   logic [31:0] final_status_word;
@@ -127,6 +133,8 @@ module spx_descriptor_adapter #(
   logic [7:0]  desc_start_step;
   logic [7:0]  desc_num_steps;
   logic [8:0]  desc_chain_end_step;
+  logic [31:0] desc_start_steps_packed;
+  logic [31:0] desc_num_steps_packed;
 
   logic [127:0] pub_seed_q;
   logic [255:0] addr_q [0:3];
@@ -187,34 +195,23 @@ module spx_descriptor_adapter #(
   assign write_accept = mem_accept && mem_we;
   assign thash_core_start = (state_q == ST_START_CORE) &&
                             (op_type_q == OP_TYPE_THASHX4);
-  assign wots_core_start = (state_q == ST_START_CORE) &&
-                           (op_type_q == OP_TYPE_WOTS_CHAINX4);
-  assign wots_req_ready = (op_type_q == OP_TYPE_WOTS_CHAINX4) &&
-                          !shared_thash_busy_q;
-  assign wots_rsp_valid = (op_type_q == OP_TYPE_WOTS_CHAINX4) &&
-                          shared_thash_done;
+  assign wots_op_selected = (op_type_q == OP_TYPE_WOTS_CHAINX4) ||
+                            (op_type_q == OP_TYPE_WOTS_CHAINX4_MIXED);
+  assign wots_core_start = (state_q == ST_START_CORE) && wots_op_selected;
+  assign wots_req_ready = wots_op_selected && !shared_thash_busy_q;
+  assign wots_rsp_valid = wots_op_selected && shared_thash_done;
   assign shared_thash_start = thash_core_start ||
                               (wots_req_valid && wots_req_ready);
-  assign shared_thash_inblocks = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                                 2'd1 : inblocks_q;
-  assign shared_thash_pub_seed = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                                 wots_req_pub_seed : pub_seed_q;
-  assign shared_thash_addr0 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                              wots_req_addr0 : addr_q[0];
-  assign shared_thash_addr1 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                              wots_req_addr1 : addr_q[1];
-  assign shared_thash_addr2 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                              wots_req_addr2 : addr_q[2];
-  assign shared_thash_addr3 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                              wots_req_addr3 : addr_q[3];
-  assign shared_thash_in0 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                            wots_req_in0 : input_q[0];
-  assign shared_thash_in1 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                            wots_req_in1 : input_q[1];
-  assign shared_thash_in2 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                            wots_req_in2 : input_q[2];
-  assign shared_thash_in3 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                            wots_req_in3 : input_q[3];
+  assign shared_thash_inblocks = wots_op_selected ? 2'd1 : inblocks_q;
+  assign shared_thash_pub_seed = wots_op_selected ? wots_req_pub_seed : pub_seed_q;
+  assign shared_thash_addr0 = wots_op_selected ? wots_req_addr0 : addr_q[0];
+  assign shared_thash_addr1 = wots_op_selected ? wots_req_addr1 : addr_q[1];
+  assign shared_thash_addr2 = wots_op_selected ? wots_req_addr2 : addr_q[2];
+  assign shared_thash_addr3 = wots_op_selected ? wots_req_addr3 : addr_q[3];
+  assign shared_thash_in0 = wots_op_selected ? wots_req_in0 : input_q[0];
+  assign shared_thash_in1 = wots_op_selected ? wots_req_in1 : input_q[1];
+  assign shared_thash_in2 = wots_op_selected ? wots_req_in2 : input_q[2];
+  assign shared_thash_in3 = wots_op_selected ? wots_req_in3 : input_q[3];
 
   assign transfer_word_next = transfer_word_q + 8'(MEM_WORDS_PER_CYCLE);
   assign transfer_last = (transfer_word_next >= burst_total_words);
@@ -228,9 +225,12 @@ module spx_descriptor_adapter #(
   assign desc_num_steps =
       desc_word_q[DESC_CHAIN_CTRL_WORD][CHAIN_CTRL_NUM_STEPS_LSB +: 8];
   assign desc_chain_end_step = {1'b0, desc_start_step} + {1'b0, desc_num_steps};
+  assign desc_start_steps_packed = desc_word_q[DESC_MIXED_START_WORD];
+  assign desc_num_steps_packed = desc_word_q[DESC_CHAIN_CTRL_WORD];
 
   assign op_type_known = (desc_op_type == OP_TYPE_THASHX4) ||
-                         (desc_op_type == OP_TYPE_WOTS_CHAINX4);
+                         (desc_op_type == OP_TYPE_WOTS_CHAINX4) ||
+                         (desc_op_type == OP_TYPE_WOTS_CHAINX4_MIXED);
   assign common_config_ok =
       (desc_word_q[DESC_CONFIG_WORD][7:4] == CONFIG_LANES_X4) &&
       (desc_word_q[DESC_CONFIG_WORD][15:8] == CONFIG_VARIANT_SHAKE_128F_SIMPLE);
@@ -238,12 +238,33 @@ module spx_descriptor_adapter #(
       common_config_ok &&
       ((desc_word_q[DESC_CONFIG_WORD][1:0] == 2'd1) ||
        (desc_word_q[DESC_CONFIG_WORD][1:0] == 2'd2));
-  assign wots_chain_window_ok =
+  assign wots_uniform_chain_window_ok =
       (desc_num_steps != 8'd0) &&
       (desc_num_steps <= 8'd15) &&
       (desc_start_step < 8'd16) &&
       (desc_chain_end_step <= 9'd16);
-  assign wots_config_ok = common_config_ok && wots_chain_window_ok;
+  always_comb begin
+    wots_mixed_chain_window_ok = 1'b1;
+    for (int lane = 0; lane < 4; lane++) begin
+      logic [7:0] lane_start_step;
+      logic [7:0] lane_num_steps;
+      logic [8:0] lane_end_step;
+
+      lane_start_step = desc_start_steps_packed[8 * lane +: 8];
+      lane_num_steps = desc_num_steps_packed[8 * lane +: 8];
+      lane_end_step = {1'b0, lane_start_step} + {1'b0, lane_num_steps};
+
+      if ((lane_start_step > 8'd16) ||
+          (lane_num_steps > 8'd15) ||
+          (lane_end_step > 9'd16)) begin
+        wots_mixed_chain_window_ok = 1'b0;
+      end
+    end
+  end
+  assign wots_config_ok =
+      common_config_ok &&
+      (((desc_op_type == OP_TYPE_WOTS_CHAINX4) && wots_uniform_chain_window_ok) ||
+       ((desc_op_type == OP_TYPE_WOTS_CHAINX4_MIXED) && wots_mixed_chain_window_ok));
 
   assign pointers_aligned =
       ((desc_word_q[DESC_ADDR_BASE_WORD][MEM_ADDR_WIDTH-1:0] & MEM_ALIGN_MASK) == '0) &&
@@ -368,17 +389,12 @@ module spx_descriptor_adapter #(
     end
   end
 
-  assign core_done = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                     wots_core_done : shared_thash_done;
-  assign core_error = (op_type_q == OP_TYPE_WOTS_CHAINX4) && wots_core_error;
-  assign core_out0 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                     wots_core_out0 : thash_core_out0;
-  assign core_out1 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                     wots_core_out1 : thash_core_out1;
-  assign core_out2 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                     wots_core_out2 : thash_core_out2;
-  assign core_out3 = (op_type_q == OP_TYPE_WOTS_CHAINX4) ?
-                     wots_core_out3 : thash_core_out3;
+  assign core_done = wots_op_selected ? wots_core_done : shared_thash_done;
+  assign core_error = wots_op_selected && wots_core_error;
+  assign core_out0 = wots_op_selected ? wots_core_out0 : thash_core_out0;
+  assign core_out1 = wots_op_selected ? wots_core_out1 : thash_core_out1;
+  assign core_out2 = wots_op_selected ? wots_core_out2 : thash_core_out2;
+  assign core_out3 = wots_op_selected ? wots_core_out3 : thash_core_out3;
 
   spx_thashx4_core u_thashx4_core (
       .clk(clk),
@@ -416,6 +432,9 @@ module spx_descriptor_adapter #(
       .in3(input_q[3][127:0]),
       .start_step(start_step_q),
       .num_steps(num_steps_q),
+      .mixed_mode(op_type_q == OP_TYPE_WOTS_CHAINX4_MIXED),
+      .start_steps_packed(start_steps_packed_q),
+      .num_steps_packed(num_steps_packed_q),
       .done(wots_core_done),
       .busy(unused_wots_core_busy),
       .error(wots_core_error),
@@ -456,6 +475,8 @@ module spx_descriptor_adapter #(
       op_type_q              <= OP_TYPE_THASHX4;
       start_step_q           <= 8'd0;
       num_steps_q            <= 8'd0;
+      start_steps_packed_q   <= 32'd0;
+      num_steps_packed_q     <= 32'd0;
       inline_pub_seed_q      <= 1'b0;
       busy_q                 <= 1'b0;
       done_q                 <= 1'b0;
@@ -514,6 +535,8 @@ module spx_descriptor_adapter #(
             op_type_q              <= OP_TYPE_THASHX4;
             start_step_q           <= 8'd0;
             num_steps_q            <= 8'd0;
+            start_steps_packed_q   <= 32'd0;
+            num_steps_packed_q     <= 32'd0;
             shared_thash_busy_q    <= 1'b0;
             if (descriptor_aligned) begin
               state_q <= ST_READ_DESC;
@@ -555,13 +578,17 @@ module spx_descriptor_adapter #(
           op_type_q <= desc_op_type;
           start_step_q <= desc_start_step;
           num_steps_q <= desc_num_steps;
-          inblocks_q <= (desc_op_type == OP_TYPE_WOTS_CHAINX4) ?
+          start_steps_packed_q <= desc_start_steps_packed;
+          num_steps_packed_q <= desc_num_steps_packed;
+          inblocks_q <= ((desc_op_type == OP_TYPE_WOTS_CHAINX4) ||
+                         (desc_op_type == OP_TYPE_WOTS_CHAINX4_MIXED)) ?
                         2'd1 : desc_word_q[DESC_CONFIG_WORD][1:0];
           input_words_per_lane_q <=
               ((desc_op_type == OP_TYPE_THASHX4) &&
                (desc_word_q[DESC_CONFIG_WORD][1:0] == 2'd2)) ? 4'd8 : 4'd4;
           input_total_words_q <=
-              (desc_op_type == OP_TYPE_WOTS_CHAINX4) ? 8'(WOTS_INPUT_WORDS) :
+              ((desc_op_type == OP_TYPE_WOTS_CHAINX4) ||
+               (desc_op_type == OP_TYPE_WOTS_CHAINX4_MIXED)) ? 8'(WOTS_INPUT_WORDS) :
               ((desc_word_q[DESC_CONFIG_WORD][1:0] == 2'd2) ? 8'd32 : 8'd16);
           pub_seed_ptr_q <= desc_word_q[DESC_PUB_SEED_PTR_WORD][MEM_ADDR_WIDTH-1:0];
           addr_base_ptr_q <= desc_word_q[DESC_ADDR_BASE_WORD][MEM_ADDR_WIDTH-1:0];
@@ -574,12 +601,14 @@ module spx_descriptor_adapter #(
             error_code_q <= ERR_BAD_OP_TYPE;
             state_q      <= ST_WRITE_STATUS;
           end else if (((desc_op_type == OP_TYPE_THASHX4) && !thash_config_ok) ||
-                       ((desc_op_type == OP_TYPE_WOTS_CHAINX4) &&
+                       (((desc_op_type == OP_TYPE_WOTS_CHAINX4) ||
+                         (desc_op_type == OP_TYPE_WOTS_CHAINX4_MIXED)) &&
                         !common_config_ok)) begin
             error_q      <= 1'b1;
             error_code_q <= ERR_BAD_CONFIG;
             state_q      <= ST_WRITE_STATUS;
-          end else if ((desc_op_type == OP_TYPE_WOTS_CHAINX4) &&
+          end else if (((desc_op_type == OP_TYPE_WOTS_CHAINX4) ||
+                        (desc_op_type == OP_TYPE_WOTS_CHAINX4_MIXED)) &&
                        !wots_config_ok) begin
             error_q      <= 1'b1;
             error_code_q <= ERR_BAD_CHAIN;

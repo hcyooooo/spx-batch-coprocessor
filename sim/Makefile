@@ -121,11 +121,11 @@ ERROR_SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_error_smoke.hex
 ERROR_SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_error_smoke.gcc.txt
 CV32E40X_SMOKE_BIN := $(BUILD_DIR)/obj_cv32e40x_spx_core_smoke/tb_cv32e40x_spx_core_smoke
 
-.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-wots-chain-smoke build-cv32e40x-wots-chain-error-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-wots-chain-smoke sim-cv32e40x-wots-chain-smoke-wait1 sim-cv32e40x-wots-chain-smoke-wait2 sim-cv32e40x-wots-chain-smoke-split sim-cv32e40x-wots-chain-smoke-random50 sim-cv32e40x-wots-chain-smoke-random75 sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-perf sim-cv32e40x-core-smoke-error clean distclean
+.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-wots-chain-smoke build-cv32e40x-wots-chain-error-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chainx4-mixed sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-wots-chain-smoke sim-cv32e40x-wots-chain-smoke-wait1 sim-cv32e40x-wots-chain-smoke-wait2 sim-cv32e40x-wots-chain-smoke-split sim-cv32e40x-wots-chain-smoke-random50 sim-cv32e40x-wots-chain-smoke-random75 sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-perf sim-cv32e40x-core-smoke-error clean distclean
 
 all: test
 
-test: sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error
+test: sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chainx4-mixed sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error
 
 lint:
 	../scripts/lint_rtl.sh
@@ -254,6 +254,15 @@ sim-wots-chainx4: vectors
 	./$(BUILD_DIR)/obj_wots_chainx4_core/tb_wots_chainx4_core \
 		+VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex
 
+sim-wots-chainx4-mixed: vectors
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		--top-module tb_wots_chainx4_mixed \
+		-Mdir $(BUILD_DIR)/obj_wots_chainx4_mixed \
+		-o tb_wots_chainx4_mixed \
+		$(RTL_PKG) $(RTL_WOTS_CHAIN) tb/tb_wots_chainx4_mixed.sv
+	./$(BUILD_DIR)/obj_wots_chainx4_mixed/tb_wots_chainx4_mixed \
+		+VECTORS=$(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex
+
 sim-wots-chain-descriptor: vectors
 	$(VERILATOR) -sv --binary --timing -Wno-fatal \
 		--top-module tb_wots_chain_descriptor \
@@ -261,7 +270,10 @@ sim-wots-chain-descriptor: vectors
 		-o tb_wots_chain_descriptor \
 		$(RTL_PKG) $(RTL_DESCRIPTOR_ADAPTER) tb/tb_wots_chain_descriptor.sv
 	./$(BUILD_DIR)/obj_wots_chain_descriptor/tb_wots_chain_descriptor \
-		+VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex
+		+VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+MIXED_VECTORS=$(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
 
 sim-cop-wrapper: vectors
 	$(VERILATOR) -sv --binary --timing -Wno-fatal \
@@ -406,6 +418,7 @@ sim-cv32e40x-wots-chain-smoke: build-cv32e40x-wots-chain-smoke vectors build-cv3
 		+WOTS_CHAIN_SMOKE \
 		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
 		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+WOTS_MIXED_VECTORS=$(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex \
 		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=100 \
 		+SMOKE_MODE=zero_wait
 
@@ -414,6 +427,7 @@ sim-cv32e40x-wots-chain-smoke-wait1: build-cv32e40x-wots-chain-smoke vectors bui
 		+WOTS_CHAIN_SMOKE \
 		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
 		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+WOTS_MIXED_VECTORS=$(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex \
 		+SMOKE_READ_LATENCY=1 +SMOKE_WRITE_LATENCY=1 +SMOKE_REQ_READY_PCT=100 \
 		+SMOKE_MODE=wait1
 
@@ -422,6 +436,7 @@ sim-cv32e40x-wots-chain-smoke-wait2: build-cv32e40x-wots-chain-smoke vectors bui
 		+WOTS_CHAIN_SMOKE \
 		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
 		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+WOTS_MIXED_VECTORS=$(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex \
 		+SMOKE_READ_LATENCY=2 +SMOKE_WRITE_LATENCY=2 +SMOKE_REQ_READY_PCT=100 \
 		+SMOKE_MODE=wait2
 
@@ -430,6 +445,7 @@ sim-cv32e40x-wots-chain-smoke-split: build-cv32e40x-wots-chain-smoke vectors bui
 		+WOTS_CHAIN_SMOKE \
 		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
 		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+WOTS_MIXED_VECTORS=$(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex \
 		+SMOKE_READ_LATENCY=2 +SMOKE_WRITE_LATENCY=4 +SMOKE_REQ_READY_PCT=100 \
 		+SMOKE_MODE=split_read2_write4
 
@@ -438,6 +454,7 @@ sim-cv32e40x-wots-chain-smoke-random50: build-cv32e40x-wots-chain-smoke vectors 
 		+WOTS_CHAIN_SMOKE \
 		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
 		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+WOTS_MIXED_VECTORS=$(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex \
 		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=50 \
 		+SMOKE_MODE=random_ready50
 
@@ -446,6 +463,7 @@ sim-cv32e40x-wots-chain-smoke-random75: build-cv32e40x-wots-chain-smoke vectors 
 		+WOTS_CHAIN_SMOKE \
 		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
 		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+WOTS_MIXED_VECTORS=$(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex \
 		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=75 \
 		+SMOKE_MODE=random_ready75
 
@@ -525,3 +543,4 @@ distclean: clean
 	rm -f $(VECTOR_DIR)/thashx4_inblocks2.hex
 	rm -f $(VECTOR_DIR)/thashx4_expected.hex
 	rm -f $(VECTOR_DIR)/wots_chainx4_vectors.hex
+	rm -f $(VECTOR_DIR)/wots_chainx4_mixed_vectors.hex

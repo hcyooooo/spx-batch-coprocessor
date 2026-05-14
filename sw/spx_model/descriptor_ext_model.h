@@ -15,7 +15,8 @@
 
 typedef enum {
     SPX_DESCRIPTOR_MODEL_OP_THASHX4 = 0,
-    SPX_DESCRIPTOR_MODEL_OP_WOTS_CHAINX4 = 1
+    SPX_DESCRIPTOR_MODEL_OP_WOTS_CHAINX4 = 1,
+    SPX_DESCRIPTOR_MODEL_OP_WOTS_CHAINX4_MIXED = 2
 } spx_descriptor_model_op_t;
 
 typedef struct {
@@ -27,6 +28,8 @@ typedef struct {
     uint32_t inblocks;
     uint32_t start_step;
     uint32_t num_steps;
+    uint32_t start_steps[SPX_WOTS_CHAINX4_LANES];
+    uint32_t lane_num_steps[SPX_WOTS_CHAINX4_LANES];
     uint32_t lanes;
     uint32_t variant;
 } spx_descriptor_model_t;
@@ -49,6 +52,11 @@ void spx_descriptor_model_estimate_repeated_thashx4(
 
 void spx_descriptor_model_estimate_wots_chainx4(
     uint32_t num_steps,
+    uint32_t chain_scheduler_cycles,
+    spx_descriptor_model_stats_t *stats);
+
+void spx_descriptor_model_estimate_wots_chainx4_mixed(
+    const uint32_t num_steps[SPX_WOTS_CHAINX4_LANES],
     uint32_t chain_scheduler_cycles,
     spx_descriptor_model_stats_t *stats);
 

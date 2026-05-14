@@ -81,6 +81,27 @@ int spx_descriptor_model_execute(const spx_descriptor_model_t *desc)
         return 0;
     }
 
+    if (desc->op_type == SPX_DESCRIPTOR_MODEL_OP_WOTS_CHAINX4_MIXED) {
+        uint8_t input[SPX_WOTS_CHAINX4_LANES][SPX_WOTS_CHAINX4_N];
+        uint8_t output[SPX_WOTS_CHAINX4_LANES][SPX_WOTS_CHAINX4_N];
+
+        for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+            memcpy(input[lane],
+                   desc->input_base_ptr + lane * SPX_WOTS_CHAINX4_N,
+                   SPX_WOTS_CHAINX4_N);
+        }
+        if (spx_wots_chainx4_mixed_model(output, input, pub_seed, addr,
+                                         desc->start_steps,
+                                         desc->lane_num_steps, NULL) != 0) {
+            return -1;
+        }
+        for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+            memcpy(desc->output_base_ptr + lane * SPX_WOTS_CHAINX4_N,
+                   output[lane], SPX_WOTS_CHAINX4_N);
+        }
+        return 0;
+    }
+
     return -1;
 }
 
@@ -117,4 +138,32 @@ void spx_descriptor_model_estimate_wots_chainx4(
     stats->bus_rd = (num_steps == 0u) ? 0u : SPX_DESCRIPTOR_MODEL_BASELINE_BUS_RD_IB1_4W;
     stats->bus_wr = (num_steps == 0u) ? 0u : SPX_DESCRIPTOR_MODEL_BASELINE_BUS_WR_4W;
     stats->thash_equiv = SPX_WOTS_CHAINX4_LANES * num_steps;
+}
+
+void spx_descriptor_model_estimate_wots_chainx4_mixed(
+    const uint32_t num_steps[SPX_WOTS_CHAINX4_LANES],
+    uint32_t chain_scheduler_cycles,
+    spx_descriptor_model_stats_t *stats)
+{
+    uint32_t useful_lane_ops = 0;
+    uint32_t max_num_steps = 0;
+
+    if (stats == NULL || num_steps == NULL) {
+        return;
+    }
+
+    for (size_t lane = 0; lane < SPX_WOTS_CHAINX4_LANES; lane++) {
+        useful_lane_ops += num_steps[lane];
+        if (num_steps[lane] > max_num_steps) {
+            max_num_steps = num_steps[lane];
+        }
+    }
+
+    stats->descriptors = (max_num_steps == 0u) ? 0u : 1u;
+    stats->wall_cycles = chain_scheduler_cycles;
+    stats->xif_instr = (max_num_steps == 0u) ? 0u : SPX_DESCRIPTOR_MODEL_BASELINE_XIF_INSTR;
+    stats->status_polls = (max_num_steps == 0u) ? 0u : SPX_DESCRIPTOR_MODEL_BASELINE_STATUS_POLLS;
+    stats->bus_rd = (max_num_steps == 0u) ? 0u : SPX_DESCRIPTOR_MODEL_BASELINE_BUS_RD_IB1_4W;
+    stats->bus_wr = (max_num_steps == 0u) ? 0u : SPX_DESCRIPTOR_MODEL_BASELINE_BUS_WR_4W;
+    stats->thash_equiv = useful_lane_ops;
 }

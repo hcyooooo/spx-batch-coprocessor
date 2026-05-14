@@ -18,6 +18,7 @@
 #define DESC_CONFIG_VARIANT_SHAKE_128F_SIMPLE 0x00000100u
 #define DESC_CONFIG_LANES_X4 0x00000040u
 #define DESC_CONFIG_OP_TYPE_WOTS_CHAINX4 0x00010000u
+#define DESC_CONFIG_OP_TYPE_WOTS_CHAINX4_MIXED 0x00020000u
 
 #define STATUS_BUSY_BIT 0u
 #define STATUS_DONE_BIT 1u
@@ -32,7 +33,10 @@
 #define SMOKE_STAT_CASES_FAILED 1u
 #define SMOKE_STAT_STATUS_POLLS 2u
 #define SMOKE_STAT_ERROR_CASES_PASSED 3u
-#define SMOKE_STAT_WORDS 4u
+#define SMOKE_STAT_USEFUL_LANE_OPS 4u
+#define SMOKE_STAT_PHYSICAL_LANE_OPS 5u
+#define SMOKE_STAT_MIXED_CASES 6u
+#define SMOKE_STAT_WORDS 7u
 
 #define WOTS_VECTOR_TABLE_ADDR ((volatile const uint32_t *)0x00008000u)
 #define WOTS_VECTOR_TABLE_MAGIC 0x53505857u
@@ -42,6 +46,8 @@
 
 #define CASE_START_STEP_WORD 0u
 #define CASE_NUM_STEPS_WORD 1u
+#define CASE_START_STEPS_PACKED_WORD 0u
+#define CASE_NUM_STEPS_PACKED_WORD 1u
 #define CASE_PUB_SEED_WORD 2u
 #define CASE_ADDR_WORD (CASE_PUB_SEED_WORD + PUB_SEED_WORDS)
 #define CASE_INPUT_WORD (CASE_ADDR_WORD + ADDR_WORDS_TOTAL)
@@ -140,6 +146,13 @@ static void inc_stat(uint32_t index)
     stats[index] = stats[index] + 1u;
 }
 
+static void add_stat(uint32_t index, uint32_t value)
+{
+    volatile uint32_t *stats = SMOKE_STATS_ADDR;
+
+    stats[index] = stats[index] + value;
+}
+
 static void copy_words(volatile uint32_t *dst, const volatile uint32_t *src,
                        uint32_t words)
 {
@@ -166,7 +179,21 @@ static int compare_words(const volatile uint32_t *got,
     return 0;
 }
 
-static int valid_chain_window(uint32_t start_step, uint32_t num_steps)
+static uint32_t lane_byte(uint32_t packed, uint32_t lane)
+{
+    return (packed >> (8u * lane)) & 0xffu;
+}
+
+static int all_lane_bytes_equal(uint32_t packed)
+{
+    uint32_t lane0 = lane_byte(packed, 0u);
+
+    return lane_byte(packed, 1u) == lane0 &&
+           lane_byte(packed, 2u) == lane0 &&
+           lane_byte(packed, 3u) == lane0;
+}
+
+static int valid_lane_chain_window(uint32_t start_step, uint32_t num_steps)
 {
     if (num_steps == 0u || num_steps > 15u) {
         return 0;
@@ -180,13 +207,65 @@ static int valid_chain_window(uint32_t start_step, uint32_t num_steps)
     return 1;
 }
 
+static int valid_mixed_chain_window(uint32_t start_steps_packed,
+                                    uint32_t num_steps_packed)
+{
+    for (uint32_t lane = 0; lane < 4u; lane++) {
+        uint32_t start_step = lane_byte(start_steps_packed, lane);
+        uint32_t num_steps = lane_byte(num_steps_packed, lane);
+
+        if (num_steps > 15u) {
+            return 0;
+        }
+        if (start_step > 16u) {
+            return 0;
+        }
+        if ((start_step + num_steps) > 16u) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static uint32_t useful_lane_ops(uint32_t num_steps_packed)
+{
+    uint32_t useful = 0u;
+
+    for (uint32_t lane = 0; lane < 4u; lane++) {
+        useful += lane_byte(num_steps_packed, lane);
+    }
+    return useful;
+}
+
+static uint32_t physical_lane_ops(uint32_t num_steps_packed)
+{
+    uint32_t max_steps = 0u;
+
+    for (uint32_t lane = 0; lane < 4u; lane++) {
+        uint32_t steps = lane_byte(num_steps_packed, lane);
+
+        if (steps > max_steps) {
+            max_steps = steps;
+        }
+    }
+    return 4u * max_steps;
+}
+
 static int run_case(const volatile uint32_t *case_words)
 {
     uint32_t status;
-    const uint32_t start_step = case_words[CASE_START_STEP_WORD];
-    const uint32_t num_steps = case_words[CASE_NUM_STEPS_WORD];
+    const uint32_t start_steps_packed = case_words[CASE_START_STEPS_PACKED_WORD];
+    const uint32_t num_steps_packed = case_words[CASE_NUM_STEPS_PACKED_WORD];
+    const int uniform_mode = all_lane_bytes_equal(start_steps_packed) &&
+                             all_lane_bytes_equal(num_steps_packed);
+    const uint32_t start_step = lane_byte(start_steps_packed, 0u);
+    const uint32_t num_steps = lane_byte(num_steps_packed, 0u);
 
-    if (!valid_chain_window(start_step, num_steps)) {
+    if (uniform_mode && !valid_lane_chain_window(start_step, num_steps)) {
+        return -1;
+    }
+    if (!uniform_mode && !valid_mixed_chain_window(start_steps_packed,
+                                                   num_steps_packed)) {
         return -1;
     }
 
@@ -197,16 +276,22 @@ static int run_case(const volatile uint32_t *case_words)
     copy_words(input, case_words + CASE_INPUT_WORD, INPUT_WORDS_TOTAL);
 
     desc[DESC_FLAGS_STATUS_WORD] = 0u;
-    desc[DESC_CONFIG_WORD] = DESC_CONFIG_OP_TYPE_WOTS_CHAINX4 |
+    desc[DESC_CONFIG_WORD] = (uniform_mode ? DESC_CONFIG_OP_TYPE_WOTS_CHAINX4 :
+                              DESC_CONFIG_OP_TYPE_WOTS_CHAINX4_MIXED) |
                              DESC_CONFIG_VARIANT_SHAKE_128F_SIMPLE |
                              DESC_CONFIG_LANES_X4;
     desc[DESC_PUB_SEED_PTR_WORD] = ptr32(pub_seed);
     desc[DESC_ADDR_BASE_WORD] = ptr32(addr);
     desc[DESC_INPUT_BASE_WORD] = ptr32(input);
     desc[DESC_OUTPUT_BASE_WORD] = ptr32(output);
-    desc[DESC_LENGTH_WORD] = DESC_WORDS;
-    desc[DESC_CHAIN_CTRL_WORD] = ((num_steps & 0xffu) << 8) |
-                                 (start_step & 0xffu);
+    if (uniform_mode) {
+        desc[DESC_LENGTH_WORD] = DESC_WORDS;
+        desc[DESC_CHAIN_CTRL_WORD] = ((num_steps & 0xffu) << 8) |
+                                     (start_step & 0xffu);
+    } else {
+        desc[DESC_LENGTH_WORD] = start_steps_packed;
+        desc[DESC_CHAIN_CTRL_WORD] = num_steps_packed;
+    }
 
     (void)spx_clear();
     (void)spx_set_desc(ptr32(desc));
@@ -227,6 +312,13 @@ static int run_case(const volatile uint32_t *case_words)
                 return -4;
             }
             (void)spx_clear();
+            add_stat(SMOKE_STAT_USEFUL_LANE_OPS,
+                     useful_lane_ops(num_steps_packed));
+            add_stat(SMOKE_STAT_PHYSICAL_LANE_OPS,
+                     physical_lane_ops(num_steps_packed));
+            if (!uniform_mode) {
+                inc_stat(SMOKE_STAT_MIXED_CASES);
+            }
             return 0;
         }
     }
