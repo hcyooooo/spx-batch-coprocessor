@@ -244,6 +244,81 @@ relative to the Phase 4.2C routed result:
 
 Vivado PPA is intentionally deferred to the Phase 4.3 PPA pass.
 
+## Vivado PPA Result
+
+Phase 4.3C refreshed the descriptor-adapter out-of-context Vivado PPA on the
+Windows Vivado host with the 4-word memory-side adapter configuration:
+
+```bat
+cd synth\fpga
+run_vivado_descriptor.bat spx_descriptor_adapter xc7a35tcpg236-1 10.0 4
+```
+
+Reports were written under:
+
+```text
+synth/fpga/build/spx_descriptor_adapter_4w/reports/
+```
+
+Configuration and routed PPA:
+
+| Item | Result |
+| --- | ---: |
+| FPGA part | `xc7a35tcpg236-1` |
+| Target clock | 10.0 ns |
+| LUT | 18340 |
+| FF | 14233 |
+| BRAM | 0 |
+| DSP | 0 |
+| WNS | 0.102 ns |
+| Critical delay (`period - WNS`) | 9.898 ns |
+| Critical data path delay | 9.609 ns |
+| Estimated Fmax | 101.03 MHz |
+
+Vivado completed placement and routing successfully. The final routed timing
+summary reports all user-specified timing constraints met, with 0 setup failing
+endpoints. No `UTLZ-1`, `CRITICAL WARNING:`, `ERROR:`, or timing failure marker
+was observed in the refreshed run logs.
+
+Comparison against the Phase 4.2C shared-engine uniform WOTS baseline:
+
+| Build | LUT | FF | BRAM | DSP | Fmax | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Phase 4.2C shared-engine uniform WOTS | 17079 | 14049 | 0 | 0 | 107.67 MHz | routed |
+| Phase 4.3 mixed-length WOTS | 18340 | 14233 | 0 | 0 | 101.03 MHz | routed, timing met |
+
+Delta:
+
+| Metric | Delta |
+| --- | ---: |
+| LUT | +1261 (+7.38%) |
+| FF | +184 (+1.31%) |
+| Fmax | -6.64 MHz (-6.17%) |
+| LUT utilization | 88.17% of 20800 |
+| Remaining LUT headroom | 2460 LUTs (11.83%) |
+
+The routed hierarchy still contains only one shared hash datapath:
+
+```text
+spx_descriptor_adapter
+  u_thashx4_core
+    u_keccakx4
+  u_wots_chainx4_core
+```
+
+The hierarchical utilization report shows no
+`u_wots_chainx4_core/u_thashx4_core` instance and no second `keccakx4_core`.
+The mixed-length logic remains concentrated in the descriptor decode and the
+`spx_wots_chainx4_core` lane controller: packed per-lane start/step decode,
+per-lane `steps_left_q`, `active_mask`, and hold/update muxing.
+
+Phase 4.3 fits `xc7a35tcpg236-1` at the 10.0 ns target with a narrow but
+positive timing margin. The controller area increment is acceptable because it
+preserves the single shared THASHX4/KeccakX4 datapath and leaves 2460 LUTs of
+device headroom. Phase 4.4 WOTS public-key generation grouping is recommended,
+with the same constraint that grouping should continue reusing this shared
+hash engine unless a later PPA run justifies a different area tradeoff.
+
 ## Regression Status
 
 Observed passing commands in this workspace:
