@@ -18,6 +18,21 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   localparam logic [31:0] MAGIC_ADDR  = 32'h0000_fffc;
   localparam logic [31:0] MAGIC_PASS  = 32'h0000_0001;
   localparam logic [31:0] MAGIC_FAIL  = 32'h0000_dead;
+  localparam logic [31:0] MAGIC_ERROR_PASS = 32'h0000_e55e;
+  localparam logic [31:0] STATS_ADDR       = 32'h0000_ffe0;
+  localparam logic [31:0] CTRL_ADDR        = 32'h0000_ffd0;
+  localparam logic [31:0] VECTOR_TABLE_ADDR = 32'h0000_8000;
+  localparam logic [31:0] VECTOR_TABLE_MAGIC = 32'h5350_5856;
+  localparam int VECTOR_HEADER_WORDS = 4;
+  localparam int VECTOR_CASE_WORDS   = 85;
+  localparam int CASE_PUB_SEED_WORD  = 1;
+  localparam int CASE_ADDR_WORD      = 5;
+  localparam int CASE_INPUT_WORD     = 37;
+  localparam int CASE_EXPECTED_WORD  = 69;
+  localparam int DEFAULT_CASES_PER_INBLOCKS = 8;
+  localparam int BUS_ERR_NONE       = 0;
+  localparam int BUS_ERR_READ_ONCE  = 1;
+  localparam int BUS_ERR_WRITE_ONCE = 2;
 
   logic clk;
   logic rst_n;
@@ -121,6 +136,18 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   int unsigned desc_control_count_q;
   int unsigned bus_read_count_q;
   int unsigned bus_write_count_q;
+  int unsigned bus_read_latency_cfg;
+  int unsigned bus_write_latency_cfg;
+  int unsigned bus_req_ready_pct_cfg;
+  int unsigned smoke_cases_per_inblocks_cfg;
+  int unsigned bus_read_accept_count_q;
+  int unsigned bus_write_accept_count_q;
+  int unsigned bus_error_kind_q;
+  int unsigned bus_rsp_wait_q;
+  logic [31:0] bus_rng_q;
+  logic        bus_rsp_pending_q;
+  logic [MEM_DATA_WIDTH-1:0] bus_rsp_rdata_q;
+  logic        bus_rsp_error_q;
 
   initial begin
     clk = 1'b0;
@@ -128,7 +155,24 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   end
 
   initial begin
+    bus_read_latency_cfg      = 0;
+    bus_write_latency_cfg     = 0;
+    bus_req_ready_pct_cfg     = 100;
+    smoke_cases_per_inblocks_cfg = DEFAULT_CASES_PER_INBLOCKS;
+
+    void'($value$plusargs("SMOKE_READ_LATENCY=%d", bus_read_latency_cfg));
+    void'($value$plusargs("SMOKE_WRITE_LATENCY=%d", bus_write_latency_cfg));
+    void'($value$plusargs("SMOKE_REQ_READY_PCT=%d", bus_req_ready_pct_cfg));
+    if (bus_req_ready_pct_cfg > 100) begin
+      bus_req_ready_pct_cfg = 100;
+    end
+  end
+
+  initial begin
     string smoke_hex;
+    string vectors_ib1;
+    string vectors_ib2;
+    string expected_vectors;
 
     for (int i = 0; i < MEM_BYTES; i++) begin
       memory[i] = 8'h00;
@@ -139,6 +183,21 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
     end
     $display("Loading CV32E40X smoke image: %s", smoke_hex);
     $readmemh(smoke_hex, memory);
+
+    if (!$value$plusargs("VECTORS_IB1=%s", vectors_ib1)) begin
+      vectors_ib1 = "vectors/thashx4_inblocks1.hex";
+    end
+    if (!$value$plusargs("VECTORS_IB2=%s", vectors_ib2)) begin
+      vectors_ib2 = "vectors/thashx4_inblocks2.hex";
+    end
+    if (!$value$plusargs("EXPECTED=%s", expected_vectors)) begin
+      expected_vectors = "vectors/thashx4_expected.hex";
+    end
+    if (!$value$plusargs("SMOKE_CASES_PER_INBLOCKS=%d", smoke_cases_per_inblocks_cfg)) begin
+      smoke_cases_per_inblocks_cfg = DEFAULT_CASES_PER_INBLOCKS;
+    end
+    load_smoke_vector_table(vectors_ib1, vectors_ib2, expected_vectors,
+                            smoke_cases_per_inblocks_cfg);
   end
 
   initial begin
@@ -212,6 +271,212 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
       for (int lane = 0; lane < MEM_WORDS_PER_CYCLE; lane++) begin
         write_word(byte_addr + 32'(lane * 4), wdata[32 * lane +: 32], 4'hf);
       end
+    end
+  endtask
+
+  function automatic logic [31:0] xorshift32(input logic [31:0] value);
+    logic [31:0] next_value;
+    begin
+      next_value = value;
+      next_value ^= (next_value << 13);
+      next_value ^= (next_value >> 17);
+      next_value ^= (next_value << 5);
+      xorshift32 = (next_value == 32'd0) ? 32'hc032_3e8a : next_value;
+    end
+  endfunction
+
+  function automatic bit bus_random_ready_ok;
+    begin
+      if (bus_req_ready_pct_cfg >= 100) begin
+        bus_random_ready_ok = 1'b1;
+      end else if (bus_req_ready_pct_cfg == 0) begin
+        bus_random_ready_ok = 1'b0;
+      end else begin
+        bus_random_ready_ok = (int'(bus_rng_q % 100) < bus_req_ready_pct_cfg);
+      end
+    end
+  endfunction
+
+  function automatic bit bus_inject_error(input logic is_write);
+    begin
+      bus_inject_error =
+          (!is_write && (bus_error_kind_q == BUS_ERR_READ_ONCE)) ||
+          (is_write && (bus_error_kind_q == BUS_ERR_WRITE_ONCE));
+    end
+  endfunction
+
+  task automatic write_table_word(input int word_offset, input logic [31:0] data);
+    begin
+      write_word(VECTOR_TABLE_ADDR + 32'(word_offset * 4), data, 4'hf);
+    end
+  endtask
+
+  task automatic write_vector_case(
+      input int case_index,
+      input int inblocks,
+      input logic [127:0] pub_seed,
+      input logic [255:0] addr0,
+      input logic [255:0] addr1,
+      input logic [255:0] addr2,
+      input logic [255:0] addr3,
+      input logic [255:0] in0,
+      input logic [255:0] in1,
+      input logic [255:0] in2,
+      input logic [255:0] in3,
+      input logic [127:0] exp0,
+      input logic [127:0] exp1,
+      input logic [127:0] exp2,
+      input logic [127:0] exp3
+  );
+    int base_word;
+    begin
+      base_word = VECTOR_HEADER_WORDS + case_index * VECTOR_CASE_WORDS;
+      write_table_word(base_word, 32'(inblocks));
+
+      for (int word = 0; word < 4; word++) begin
+        write_table_word(base_word + CASE_PUB_SEED_WORD + word,
+                         pub_seed[32 * word +: 32]);
+      end
+
+      for (int word = 0; word < 8; word++) begin
+        write_table_word(base_word + CASE_ADDR_WORD + word,
+                         addr0[32 * word +: 32]);
+        write_table_word(base_word + CASE_ADDR_WORD + 8 + word,
+                         addr1[32 * word +: 32]);
+        write_table_word(base_word + CASE_ADDR_WORD + 16 + word,
+                         addr2[32 * word +: 32]);
+        write_table_word(base_word + CASE_ADDR_WORD + 24 + word,
+                         addr3[32 * word +: 32]);
+        write_table_word(base_word + CASE_INPUT_WORD + word,
+                         in0[32 * word +: 32]);
+        write_table_word(base_word + CASE_INPUT_WORD + 8 + word,
+                         in1[32 * word +: 32]);
+        write_table_word(base_word + CASE_INPUT_WORD + 16 + word,
+                         in2[32 * word +: 32]);
+        write_table_word(base_word + CASE_INPUT_WORD + 24 + word,
+                         in3[32 * word +: 32]);
+      end
+
+      for (int word = 0; word < 4; word++) begin
+        write_table_word(base_word + CASE_EXPECTED_WORD + word,
+                         exp0[32 * word +: 32]);
+        write_table_word(base_word + CASE_EXPECTED_WORD + 4 + word,
+                         exp1[32 * word +: 32]);
+        write_table_word(base_word + CASE_EXPECTED_WORD + 8 + word,
+                         exp2[32 * word +: 32]);
+        write_table_word(base_word + CASE_EXPECTED_WORD + 12 + word,
+                         exp3[32 * word +: 32]);
+      end
+    end
+  endtask
+
+  task automatic load_smoke_vector_table(
+      input string input_path0,
+      input string input_path1,
+      input string expected_path,
+      input int cases_per_inblocks
+  );
+    int input_fd;
+    int expected_fd;
+    int rc;
+    int num_cases;
+    int expected_total;
+    int exp_inblocks;
+    int loaded_cases;
+    int global_case_index;
+    string selected_input_path;
+    logic [127:0] pub_seed;
+    logic [255:0] addr0;
+    logic [255:0] addr1;
+    logic [255:0] addr2;
+    logic [255:0] addr3;
+    logic [255:0] in0;
+    logic [255:0] in1;
+    logic [255:0] in2;
+    logic [255:0] in3;
+    logic [127:0] exp0;
+    logic [127:0] exp1;
+    logic [127:0] exp2;
+    logic [127:0] exp3;
+    begin
+      if (cases_per_inblocks < DEFAULT_CASES_PER_INBLOCKS) begin
+        $fatal(1, "SMOKE_CASES_PER_INBLOCKS=%0d below required minimum %0d",
+               cases_per_inblocks, DEFAULT_CASES_PER_INBLOCKS);
+      end
+
+      expected_fd = $fopen(expected_path, "r");
+      if (expected_fd == 0) begin
+        $fatal(1, "failed to open %s", expected_path);
+      end
+      rc = $fscanf(expected_fd, "%d", expected_total);
+      if (rc != 1) begin
+        $fatal(1, "failed to read expected count from %s", expected_path);
+      end
+      if (expected_total < (2 * cases_per_inblocks)) begin
+        $fatal(1, "%s only has %0d expected cases, need %0d",
+               expected_path, expected_total, 2 * cases_per_inblocks);
+      end
+
+      write_table_word(0, VECTOR_TABLE_MAGIC);
+      write_table_word(1, 32'(cases_per_inblocks));
+      write_table_word(2, 32'(cases_per_inblocks));
+      write_table_word(3, 32'(VECTOR_CASE_WORDS));
+
+      global_case_index = 0;
+      for (int phase = 0; phase < 2; phase++) begin
+        selected_input_path = (phase == 0) ? input_path0 : input_path1;
+        input_fd = $fopen(selected_input_path, "r");
+        if (input_fd == 0) begin
+          $fatal(1, "failed to open %s", selected_input_path);
+        end
+
+        rc = $fscanf(input_fd, "%d", num_cases);
+        if (rc != 1) begin
+          $fatal(1, "failed to read case count from %s", selected_input_path);
+        end
+        if (num_cases < cases_per_inblocks) begin
+          $fatal(1, "%s only has %0d cases, need %0d",
+                 selected_input_path, num_cases, cases_per_inblocks);
+        end
+
+        loaded_cases = 0;
+        for (int case_id = 0; case_id < num_cases; case_id++) begin
+          rc = $fscanf(input_fd, "%h %h %h %h %h %h %h %h %h",
+                       pub_seed, addr0, addr1, addr2, addr3,
+                       in0, in1, in2, in3);
+          if (rc != 9) begin
+            $fatal(1, "failed to read input case %0d from %s",
+                   case_id, selected_input_path);
+          end
+
+          rc = $fscanf(expected_fd, "%d %h %h %h %h",
+                       exp_inblocks, exp0, exp1, exp2, exp3);
+          if (rc != 5) begin
+            $fatal(1, "failed to read expected case phase=%0d case=%0d from %s",
+                   phase, case_id, expected_path);
+          end
+          if (exp_inblocks != (phase + 1)) begin
+            $fatal(1, "expected inblocks mismatch phase=%0d case=%0d expected=%0d got=%0d",
+                   phase, case_id, phase + 1, exp_inblocks);
+          end
+
+          if (case_id < cases_per_inblocks) begin
+            write_vector_case(global_case_index, phase + 1,
+                              pub_seed, addr0, addr1, addr2, addr3,
+                              in0, in1, in2, in3, exp0, exp1, exp2, exp3);
+            global_case_index++;
+            loaded_cases++;
+          end
+        end
+        $fclose(input_fd);
+        if (loaded_cases != cases_per_inblocks) begin
+          $fatal(1, "loaded %0d cases for inblocks=%0d, expected %0d",
+                 loaded_cases, phase + 1, cases_per_inblocks);
+        end
+      end
+      $fclose(expected_fd);
+      $display("Loaded CV32E40X smoke vector table: inblocks1=%0d inblocks2=%0d case_words=%0d",
+               cases_per_inblocks, cases_per_inblocks, VECTOR_CASE_WORDS);
     end
   endtask
 
@@ -383,12 +648,24 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   assign data_gnt = data_req;
   assign data_exokay = 1'b0;
   assign fencei_flush_ack = fencei_flush_req;
-  assign bus_req_ready = bus_req_valid;
-  assign bus_rsp_valid = bus_req_valid && bus_req_ready;
-  assign bus_rsp_error = 1'b0;
 
   always_comb begin
-    bus_rsp_rdata = bus_req_valid ? read_bus_beat(bus_req_addr) : '0;
+    int unsigned latency_cfg;
+
+    latency_cfg = bus_req_we ? bus_write_latency_cfg : bus_read_latency_cfg;
+    bus_req_ready = bus_req_valid && !bus_rsp_pending_q && bus_random_ready_ok();
+
+    if (bus_rsp_pending_q) begin
+      bus_rsp_valid = (bus_rsp_wait_q == 0);
+      bus_rsp_rdata = bus_rsp_rdata_q;
+      bus_rsp_error = bus_rsp_error_q;
+    end else begin
+      bus_rsp_valid = bus_req_valid && bus_req_ready && (latency_cfg == 0);
+      bus_rsp_rdata = (bus_req_valid && bus_req_ready && !bus_req_we) ?
+                      read_bus_beat(bus_req_addr) : '0;
+      bus_rsp_error = (bus_req_valid && bus_req_ready) ?
+                      bus_inject_error(bus_req_we) : 1'b0;
+    end
   end
 
   always_ff @(posedge clk or negedge rst_n) begin
@@ -426,9 +703,60 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
     end
   end
 
-  always_ff @(posedge clk) begin
-    if (rst_n && bus_req_valid && bus_req_ready && bus_req_we) begin
-      write_bus_beat(bus_req_addr, bus_req_wdata);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      bus_rng_q                <= 32'hc032_0001;
+      bus_rsp_pending_q        <= 1'b0;
+      bus_rsp_wait_q           <= 0;
+      bus_rsp_rdata_q          <= '0;
+      bus_rsp_error_q          <= 1'b0;
+      bus_read_accept_count_q  <= 0;
+      bus_write_accept_count_q <= 0;
+      bus_error_kind_q         <= BUS_ERR_NONE;
+    end else begin
+      int unsigned latency_cfg;
+      bit inject_error;
+
+      bus_rng_q <= xorshift32(bus_rng_q);
+
+      if (data_req && data_gnt && data_we &&
+          (data_addr == CTRL_ADDR) && (data_be == 4'hf)) begin
+        bus_error_kind_q <= int'(data_wdata);
+      end
+
+      if (bus_rsp_pending_q) begin
+        if (bus_rsp_wait_q != 0) begin
+          bus_rsp_wait_q <= bus_rsp_wait_q - 1;
+        end else if (bus_rsp_valid) begin
+          bus_rsp_pending_q <= 1'b0;
+          bus_rsp_error_q   <= 1'b0;
+        end
+      end
+
+      if (bus_req_valid && bus_req_ready) begin
+        latency_cfg = bus_req_we ? bus_write_latency_cfg : bus_read_latency_cfg;
+        inject_error = bus_inject_error(bus_req_we);
+
+        if (bus_req_we) begin
+          bus_write_accept_count_q <= bus_write_accept_count_q + 1;
+          if (!inject_error) begin
+            write_bus_beat(bus_req_addr, bus_req_wdata);
+          end
+        end else begin
+          bus_read_accept_count_q <= bus_read_accept_count_q + 1;
+        end
+
+        if (inject_error) begin
+          bus_error_kind_q <= BUS_ERR_NONE;
+        end
+
+        if (latency_cfg != 0) begin
+          bus_rsp_pending_q <= 1'b1;
+          bus_rsp_wait_q    <= latency_cfg - 1;
+          bus_rsp_rdata_q   <= bus_req_we ? '0 : read_bus_beat(bus_req_addr);
+          bus_rsp_error_q   <= inject_error;
+        end
+      end
     end
   end
 
@@ -487,7 +815,22 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
       end
 
       magic_word = read_word(MAGIC_ADDR);
-      if (magic_word == MAGIC_PASS) begin
+      if ((magic_word == MAGIC_PASS) || (magic_word == MAGIC_ERROR_PASS)) begin
+        logic [31:0] cases_passed;
+        logic [31:0] cases_failed;
+        logic [31:0] status_poll_count;
+        logic [31:0] error_cases_passed;
+
+        cases_passed       = read_word(STATS_ADDR);
+        cases_failed       = read_word(STATS_ADDR + 32'd4);
+        status_poll_count  = read_word(STATS_ADDR + 32'd8);
+        error_cases_passed = read_word(STATS_ADDR + 32'd12);
+
+        if ((magic_word == MAGIC_PASS) &&
+            (cases_passed < 32'(2 * smoke_cases_per_inblocks_cfg))) begin
+          $fatal(1, "PASS magic observed before expected case count cases_passed=%0d expected=%0d",
+                 cases_passed, 2 * smoke_cases_per_inblocks_cfg);
+        end
         if (xif_accept_count_q < 8) begin
           $fatal(1, "PASS magic observed before expected XIF traffic count=%0d",
                  xif_accept_count_q);
@@ -496,16 +839,31 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
           $fatal(1, "PASS magic observed before descriptor controls count=%0d",
                  desc_control_count_q);
         end
-        $display("PASS cv32e40x_spx_core_smoke cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d",
-                 cycle_q, instr_fetch_count_q, data_read_count_q, data_write_count_q,
-                 xif_issue_count_q, xif_accept_count_q, xif_result_count_q,
-                 desc_control_count_q, bus_read_count_q, bus_write_count_q,
-                 perf_load_cycles, perf_core_cycles, perf_store_cycles,
-                 perf_total_cycles);
+        if (magic_word == MAGIC_PASS) begin
+          $display("PASS cv32e40x_spx_core_smoke read_latency=%0d write_latency=%0d req_ready_pct=%0d cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
+                   bus_read_latency_cfg, bus_write_latency_cfg, bus_req_ready_pct_cfg,
+                   cycle_q, instr_fetch_count_q, data_read_count_q, data_write_count_q,
+                   xif_issue_count_q, xif_accept_count_q, xif_result_count_q,
+                   desc_control_count_q, bus_read_count_q, bus_write_count_q,
+                   perf_load_cycles, perf_core_cycles, perf_store_cycles,
+                   perf_total_cycles, cases_passed, cases_failed, status_poll_count,
+                   error_cases_passed);
+        end else begin
+          $display("PASS cv32e40x_spx_core_smoke_error read_latency=%0d write_latency=%0d req_ready_pct=%0d cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
+                   bus_read_latency_cfg, bus_write_latency_cfg, bus_req_ready_pct_cfg,
+                   cycle_q, instr_fetch_count_q, data_read_count_q, data_write_count_q,
+                   xif_issue_count_q, xif_accept_count_q, xif_result_count_q,
+                   desc_control_count_q, bus_read_count_q, bus_write_count_q,
+                   perf_load_cycles, perf_core_cycles, perf_store_cycles,
+                   perf_total_cycles, cases_passed, cases_failed, status_poll_count,
+                   error_cases_passed);
+        end
         $finish;
       end
       if (magic_word == MAGIC_FAIL) begin
-        $fatal(1, "FAIL magic observed at 0x%08x", MAGIC_ADDR);
+        $fatal(1, "FAIL magic observed at 0x%08x cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
+               MAGIC_ADDR, read_word(STATS_ADDR), read_word(STATS_ADDR + 32'd4),
+               read_word(STATS_ADDR + 32'd8), read_word(STATS_ADDR + 32'd12));
       end
       if (cycle_q > TIMEOUT_CYCLES) begin
         $fatal(1, "timeout waiting for PASS magic pc_valid=%0b pc=0x%08x magic=0x%08x xif_accept=%0d desc_status=0x%08x",
@@ -521,6 +879,7 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
       (|mcycle) | debug_havereset | debug_running | debug_halted |
       debug_pc_valid | (|debug_pc) | core_sleep | desc_busy | desc_done |
       desc_error | mem_valid | mem_we | mem_error | (|mem_addr) |
-      (|mem_wdata) | (|mem_rdata) | xif_mem_valid_count_q;
+      (|mem_wdata) | (|mem_rdata) | xif_mem_valid_count_q |
+      (|bus_read_accept_count_q) | (|bus_write_accept_count_q);
 
 endmodule

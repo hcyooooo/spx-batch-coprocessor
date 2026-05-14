@@ -104,12 +104,17 @@ SMOKE_ELF := $(BUILD_DIR)/spx_cvxif_smoke.elf
 SMOKE_DUMP := $(BUILD_DIR)/spx_cvxif_smoke.dump
 SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_smoke.hex
 SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_smoke.gcc.txt
+ERROR_SMOKE_ELF := $(BUILD_DIR)/spx_cvxif_error_smoke.elf
+ERROR_SMOKE_DUMP := $(BUILD_DIR)/spx_cvxif_error_smoke.dump
+ERROR_SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_error_smoke.hex
+ERROR_SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_error_smoke.gcc.txt
+CV32E40X_SMOKE_BIN := $(BUILD_DIR)/obj_cv32e40x_spx_core_smoke/tb_cv32e40x_spx_core_smoke
 
-.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke clean distclean
+.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-smoke-error clean distclean
 
 all: test
 
-test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter
+test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress
 
 lint:
 	../scripts/lint_rtl.sh
@@ -137,16 +142,33 @@ $(SMOKE_ELF): ../sw/tests/spx_cvxif_smoke.c ../sw/tests/spx_cvxif_smoke.ld | $(B
 		-o $@ ../sw/tests/spx_cvxif_smoke.c
 	$(RISCV_GCC) --version > $(SMOKE_GCC_VERSION)
 
+$(ERROR_SMOKE_ELF): ../sw/tests/spx_cvxif_error_smoke.c ../sw/tests/spx_cvxif_smoke.ld | $(BUILD_DIR) check-riscv-gcc
+	$(RISCV_GCC) $(RISCV_CFLAGS) $(RISCV_LDFLAGS) \
+		-Wl,-Map=$(BUILD_DIR)/spx_cvxif_error_smoke.map \
+		-o $@ ../sw/tests/spx_cvxif_error_smoke.c
+	$(RISCV_GCC) --version > $(ERROR_SMOKE_GCC_VERSION)
+
 $(SMOKE_DUMP): $(SMOKE_ELF)
 	$(RISCV_OBJDUMP) -d -s $< > $@
 
+$(ERROR_SMOKE_DUMP): $(ERROR_SMOKE_ELF)
+	$(RISCV_OBJDUMP) -d -s $< > $@
+
 $(SMOKE_HEX): $(SMOKE_ELF)
+	$(RISCV_OBJCOPY) -O verilog $< $@
+
+$(ERROR_SMOKE_HEX): $(ERROR_SMOKE_ELF)
 	$(RISCV_OBJCOPY) -O verilog $< $@
 
 build-cv32e40x-smoke: $(SMOKE_ELF) $(SMOKE_DUMP) $(SMOKE_HEX)
 	@echo "Built $(SMOKE_ELF)"
 	@echo "Built $(SMOKE_DUMP)"
 	@echo "Built $(SMOKE_HEX)"
+
+build-cv32e40x-error-smoke: $(ERROR_SMOKE_ELF) $(ERROR_SMOKE_DUMP) $(ERROR_SMOKE_HEX)
+	@echo "Built $(ERROR_SMOKE_ELF)"
+	@echo "Built $(ERROR_SMOKE_DUMP)"
+	@echo "Built $(ERROR_SMOKE_HEX)"
 
 $(GEN): gen_thashx4_vectors.c ../sw/spx_model/keccakx4.c ../sw/spx_model/keccakx4.h | $(BUILD_DIR)
 	$(CC) -std=c99 -Wall -Wextra -O2 -I../sw/spx_model \
@@ -293,7 +315,7 @@ sim-cvxif-real-adapter: vectors
 		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
 		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
 
-sim-cv32e40x-core-smoke: build-cv32e40x-smoke
+$(CV32E40X_SMOKE_BIN): $(RTL_PKG) $(CV32E40X_CORE_RTL) $(RTL_CVXIF_REAL_ADAPTER_NO_XIF) tb/tb_cv32e40x_spx_core_smoke.sv | $(BUILD_DIR)
 	$(VERILATOR) -sv --binary --timing -Wno-fatal \
 		$(CV32E40X_INC) \
 		--top-module tb_cv32e40x_spx_core_smoke \
@@ -301,8 +323,67 @@ sim-cv32e40x-core-smoke: build-cv32e40x-smoke
 		-o tb_cv32e40x_spx_core_smoke \
 		$(RTL_PKG) $(CV32E40X_CORE_RTL) $(RTL_CVXIF_REAL_ADAPTER_NO_XIF) \
 		tb/tb_cv32e40x_spx_core_smoke.sv
-	./$(BUILD_DIR)/obj_cv32e40x_spx_core_smoke/tb_cv32e40x_spx_core_smoke \
-		+SMOKE_HEX=$(SMOKE_HEX)
+
+build-cv32e40x-core-smoke-sim: $(CV32E40X_SMOKE_BIN)
+	@echo "Built $(CV32E40X_SMOKE_BIN)"
+
+sim-cv32e40x-core-smoke: build-cv32e40x-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+SMOKE_HEX=$(SMOKE_HEX) \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex \
+		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=100
+
+sim-cv32e40x-core-smoke-wait1: build-cv32e40x-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+SMOKE_HEX=$(SMOKE_HEX) \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex \
+		+SMOKE_READ_LATENCY=1 +SMOKE_WRITE_LATENCY=1 +SMOKE_REQ_READY_PCT=100
+
+sim-cv32e40x-core-smoke-wait2: build-cv32e40x-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+SMOKE_HEX=$(SMOKE_HEX) \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex \
+		+SMOKE_READ_LATENCY=2 +SMOKE_WRITE_LATENCY=2 +SMOKE_REQ_READY_PCT=100
+
+sim-cv32e40x-core-smoke-split: build-cv32e40x-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+SMOKE_HEX=$(SMOKE_HEX) \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex \
+		+SMOKE_READ_LATENCY=2 +SMOKE_WRITE_LATENCY=4 +SMOKE_REQ_READY_PCT=100
+
+sim-cv32e40x-core-smoke-random50: build-cv32e40x-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+SMOKE_HEX=$(SMOKE_HEX) \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex \
+		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=50
+
+sim-cv32e40x-core-smoke-random75: build-cv32e40x-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+SMOKE_HEX=$(SMOKE_HEX) \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex \
+		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=75
+
+sim-cv32e40x-core-smoke-error: build-cv32e40x-error-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+SMOKE_HEX=$(ERROR_SMOKE_HEX) \
+		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
+		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
+		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex \
+		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=100
+
+sim-cv32e40x-core-smoke-regress: sim-cv32e40x-core-smoke sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-error
 
 clean:
 	rm -rf $(BUILD_DIR)

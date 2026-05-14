@@ -3,7 +3,6 @@
 #define DESC_WORDS 12u
 #define PUB_SEED_WORDS 4u
 #define ADDR_WORDS_TOTAL 32u
-#define INPUT_WORDS_PER_LANE_MAX 8u
 #define INPUT_WORDS_TOTAL_MAX 32u
 #define OUTPUT_WORDS_TOTAL 16u
 
@@ -22,10 +21,16 @@
 #define STATUS_BUSY_BIT 0u
 #define STATUS_DONE_BIT 1u
 #define STATUS_ERROR_BIT 2u
+#define STATUS_ERROR_CODE_LSB 4u
+
+#define ERR_BAD_CONFIG 0x1u
+#define ERR_BAD_ALIGN 0x2u
+#define ERR_MEM_READ 0x3u
+#define ERR_MEM_WRITE 0x4u
 
 #define SMOKE_MAGIC_ADDR ((volatile uint32_t *)0x0000fffcu)
-#define SMOKE_MAGIC_PASS 0x00000001u
 #define SMOKE_MAGIC_FAIL 0x0000deadu
+#define SMOKE_MAGIC_ERROR_PASS 0x0000e55eu
 
 #define SMOKE_STATS_ADDR ((volatile uint32_t *)0x0000ffe0u)
 #define SMOKE_STAT_CASES_PASSED 0u
@@ -34,17 +39,10 @@
 #define SMOKE_STAT_ERROR_CASES_PASSED 3u
 #define SMOKE_STAT_WORDS 4u
 
-#define SMOKE_VECTOR_TABLE_ADDR ((volatile const uint32_t *)0x00008000u)
-#define SMOKE_VECTOR_TABLE_MAGIC 0x53505856u
-#define SMOKE_VECTOR_HEADER_WORDS 4u
-#define SMOKE_VECTOR_CASE_WORDS 85u
-#define SMOKE_VECTOR_MIN_CASES_PER_INBLOCKS 8u
-
-#define CASE_INBLOCKS_WORD 0u
-#define CASE_PUB_SEED_WORD 1u
-#define CASE_ADDR_WORD (CASE_PUB_SEED_WORD + PUB_SEED_WORDS)
-#define CASE_INPUT_WORD (CASE_ADDR_WORD + ADDR_WORDS_TOTAL)
-#define CASE_EXPECTED_WORD (CASE_INPUT_WORD + INPUT_WORDS_TOTAL_MAX)
+#define SMOKE_CTRL_ADDR ((volatile uint32_t *)0x0000ffd0u)
+#define SMOKE_CTRL_NONE 0u
+#define SMOKE_CTRL_READ_ERROR_ONCE 1u
+#define SMOKE_CTRL_WRITE_ERROR_ONCE 2u
 
 extern uint32_t __stack_top;
 
@@ -139,14 +137,6 @@ static void inc_stat(uint32_t index)
     stats[index] = stats[index] + 1u;
 }
 
-static void copy_words(volatile uint32_t *dst, const volatile uint32_t *src,
-                       uint32_t words)
-{
-    for (uint32_t i = 0; i < words; i++) {
-        dst[i] = src[i];
-    }
-}
-
 static void clear_words(volatile uint32_t *dst, uint32_t words)
 {
     for (uint32_t i = 0; i < words; i++) {
@@ -154,37 +144,19 @@ static void clear_words(volatile uint32_t *dst, uint32_t words)
     }
 }
 
-static int compare_words(const volatile uint32_t *got,
-                         const volatile uint32_t *expected, uint32_t words)
+static void setup_valid_descriptor(uint32_t inblocks)
 {
-    for (uint32_t i = 0; i < words; i++) {
-        if (got[i] != expected[i]) {
-            return -1;
-        }
-    }
-    return 0;
-}
-
-static int run_case(const volatile uint32_t *case_words)
-{
-    uint32_t status;
-    const uint32_t inblocks = case_words[CASE_INBLOCKS_WORD];
-    const uint32_t input_words_per_lane = inblocks * 4u;
-
-    if ((inblocks != 1u) && (inblocks != 2u)) {
-        return -1;
-    }
-
     clear_words(desc, DESC_WORDS);
     clear_words(output, OUTPUT_WORDS_TOTAL);
-    copy_words(pub_seed, case_words + CASE_PUB_SEED_WORD, PUB_SEED_WORDS);
-    copy_words(addr, case_words + CASE_ADDR_WORD, ADDR_WORDS_TOTAL);
-    for (uint32_t lane = 0; lane < 4u; lane++) {
-        for (uint32_t word = 0; word < input_words_per_lane; word++) {
-            input[lane * input_words_per_lane + word] =
-                case_words[CASE_INPUT_WORD +
-                           lane * INPUT_WORDS_PER_LANE_MAX + word];
-        }
+
+    for (uint32_t i = 0; i < PUB_SEED_WORDS; i++) {
+        pub_seed[i] = 0x11223344u + i * 0x01010101u;
+    }
+    for (uint32_t i = 0; i < ADDR_WORDS_TOTAL; i++) {
+        addr[i] = 0x80000000u ^ (i * 0x0103070bu);
+    }
+    for (uint32_t i = 0; i < INPUT_WORDS_TOTAL_MAX; i++) {
+        input[i] = 0x01020304u + i * 0x11111111u;
     }
 
     desc[DESC_FLAGS_STATUS_WORD] = 0u;
@@ -197,82 +169,89 @@ static int run_case(const volatile uint32_t *case_words)
     desc[DESC_OUTPUT_BASE_WORD] = ptr32(output);
     desc[DESC_LENGTH_WORD] = 8u;
     desc[DESC_INLINE_SEED_WORD] = 0u;
+}
+
+static void fail_and_stop(void)
+{
+    inc_stat(SMOKE_STAT_CASES_FAILED);
+    *SMOKE_CTRL_ADDR = SMOKE_CTRL_NONE;
+    write_magic(SMOKE_MAGIC_FAIL);
+    stop_forever();
+}
+
+static int expect_error_status(uint32_t start_addr, uint32_t expected_code)
+{
+    uint32_t status;
 
     (void)spx_clear();
-    (void)spx_set_desc(ptr32(desc));
+    (void)spx_set_desc(start_addr);
     status = spx_start();
     if (((status >> STATUS_BUSY_BIT) & 1u) == 0u) {
-        return -2;
+        return -1;
     }
 
     for (uint32_t poll = 0; poll < 50000u; poll++) {
         status = spx_status();
         inc_stat(SMOKE_STAT_STATUS_POLLS);
         if (((status >> STATUS_DONE_BIT) & 1u) != 0u) {
-            if (((status >> STATUS_ERROR_BIT) & 1u) != 0u) {
-                return -3;
+            uint32_t observed_code;
+
+            if (((status >> STATUS_ERROR_BIT) & 1u) == 0u) {
+                return -2;
             }
-            if (compare_words(output, case_words + CASE_EXPECTED_WORD,
-                              OUTPUT_WORDS_TOTAL) != 0) {
-                return -4;
+            observed_code = (status >> STATUS_ERROR_CODE_LSB) & 0xfu;
+            if (observed_code != expected_code) {
+                return -3;
             }
             (void)spx_clear();
             return 0;
         }
     }
 
-    return -5;
+    return -4;
 }
 
-static void fail_and_stop(void)
+static void pass_error_case(void)
 {
-    inc_stat(SMOKE_STAT_CASES_FAILED);
-    write_magic(SMOKE_MAGIC_FAIL);
-    stop_forever();
+    inc_stat(SMOKE_STAT_ERROR_CASES_PASSED);
 }
 
 int main(void)
 {
-    const volatile uint32_t *table = SMOKE_VECTOR_TABLE_ADDR;
-    const volatile uint32_t *case_words;
-    uint32_t cases_ib1;
-    uint32_t cases_ib2;
-    uint32_t case_stride;
-
     write_magic(0u);
     reset_stats();
+    *SMOKE_CTRL_ADDR = SMOKE_CTRL_NONE;
 
-    if (table[0] != SMOKE_VECTOR_TABLE_MAGIC) {
+    setup_valid_descriptor(1u);
+    desc[DESC_CONFIG_WORD] = DESC_CONFIG_VARIANT_SHAKE_128F_SIMPLE |
+                             DESC_CONFIG_LANES_X4 | 3u;
+    if (expect_error_status(ptr32(desc), ERR_BAD_CONFIG) != 0) {
         fail_and_stop();
     }
+    pass_error_case();
 
-    cases_ib1 = table[1];
-    cases_ib2 = table[2];
-    case_stride = table[3];
-
-    if ((cases_ib1 < SMOKE_VECTOR_MIN_CASES_PER_INBLOCKS) ||
-        (cases_ib2 < SMOKE_VECTOR_MIN_CASES_PER_INBLOCKS) ||
-        (case_stride != SMOKE_VECTOR_CASE_WORDS)) {
+    setup_valid_descriptor(1u);
+    if (expect_error_status(ptr32(desc) + 4u, ERR_BAD_ALIGN) != 0) {
         fail_and_stop();
     }
+    pass_error_case();
 
-    case_words = table + SMOKE_VECTOR_HEADER_WORDS;
-    for (uint32_t case_id = 0; case_id < cases_ib1; case_id++) {
-        if (run_case(case_words) != 0) {
-            fail_and_stop();
-        }
-        inc_stat(SMOKE_STAT_CASES_PASSED);
-        case_words += case_stride;
+    setup_valid_descriptor(1u);
+    *SMOKE_CTRL_ADDR = SMOKE_CTRL_READ_ERROR_ONCE;
+    if (expect_error_status(ptr32(desc), ERR_MEM_READ) != 0) {
+        fail_and_stop();
     }
+    *SMOKE_CTRL_ADDR = SMOKE_CTRL_NONE;
+    pass_error_case();
 
-    for (uint32_t case_id = 0; case_id < cases_ib2; case_id++) {
-        if (run_case(case_words) != 0) {
-            fail_and_stop();
-        }
-        inc_stat(SMOKE_STAT_CASES_PASSED);
-        case_words += case_stride;
+    setup_valid_descriptor(1u);
+    *SMOKE_CTRL_ADDR = SMOKE_CTRL_WRITE_ERROR_ONCE;
+    if (expect_error_status(ptr32(desc), ERR_MEM_WRITE) != 0) {
+        fail_and_stop();
     }
+    *SMOKE_CTRL_ADDR = SMOKE_CTRL_NONE;
+    pass_error_case();
 
-    write_magic(SMOKE_MAGIC_PASS);
+    write_magic(SMOKE_MAGIC_ERROR_PASS);
     stop_forever();
 }
