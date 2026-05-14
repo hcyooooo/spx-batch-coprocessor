@@ -1,6 +1,6 @@
 [submodule "third_party/core-v-xif"]
 	path = third_party/core-v-xif
 	url = https://github.com/openhwgroup/core-v-xif.git
-[submodule "third_party/cv32e40px"]
-	path = third_party/cv32e40px
-	url = https://github.com/x-heep/cv32e40px.git
+[submodule "third_party/cv32e40x"]
+	path = third_party/cv32e40x
+	url = https://github.com/openhwgroup/cv32e40x.git
