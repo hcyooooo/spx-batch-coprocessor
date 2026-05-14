@@ -80,6 +80,7 @@ if {$top eq "spx_cvxif_adapter_coarse"} {
   lappend rtl_files [file join $repo_root rtl cvxif spx_cvxif_adapter_coarse.sv]
 }
 if {$top eq "spx_descriptor_adapter"} {
+  lappend rtl_files [file join $repo_root rtl core spx_wots_chainx4_core.sv]
   lappend rtl_files [file join $repo_root rtl cvxif spx_descriptor_adapter.sv]
 }
 

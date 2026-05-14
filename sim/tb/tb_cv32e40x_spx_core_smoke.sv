@@ -19,6 +19,7 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   localparam logic [31:0] MAGIC_PASS  = 32'h0000_0001;
   localparam logic [31:0] MAGIC_FAIL  = 32'h0000_dead;
   localparam logic [31:0] MAGIC_ERROR_PASS = 32'h0000_e55e;
+  localparam logic [31:0] MAGIC_WOTS_ERROR_PASS = 32'h0000_e42e;
   localparam logic [31:0] STATS_ADDR       = 32'h0000_ffe0;
   localparam logic [31:0] CTRL_ADDR        = 32'h0000_ffd0;
   localparam logic [31:0] VECTOR_TABLE_ADDR = 32'h0000_8000;
@@ -48,6 +49,7 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   localparam int BUS_ERR_WRITE_ONCE = 2;
   localparam int DESC_DONE_TIMEOUT_CYCLES = 20000;
   localparam int XIF_RESULT_TIMEOUT_CYCLES = 2000;
+  localparam int WOTS_ERROR_EXPECTED_CASES = 7;
 
   localparam logic [6:0] SPX_OPCODE_CUSTOM0 = 7'b0001011;
   localparam logic [6:0] SPX_FUNCT7         = 7'h5a;
@@ -183,6 +185,7 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
   logic [MEM_DATA_WIDTH-1:0] bus_rsp_rdata_q;
   logic        bus_rsp_error_q;
   bit          wots_chain_smoke_cfg;
+  bit          wots_chain_error_smoke_cfg;
   string       smoke_mode_cfg;
 
   logic        xif_outstanding_q [0:XIF_IDS-1];
@@ -253,6 +256,7 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
     smoke_cases_per_inblocks_cfg = DEFAULT_CASES_PER_INBLOCKS;
     expected_case_count_cfg   = 2 * DEFAULT_CASES_PER_INBLOCKS;
     wots_chain_smoke_cfg      = $test$plusargs("WOTS_CHAIN_SMOKE");
+    wots_chain_error_smoke_cfg = $test$plusargs("WOTS_CHAIN_ERROR_SMOKE");
 
     void'($value$plusargs("SMOKE_READ_LATENCY=%d", bus_read_latency_cfg));
     void'($value$plusargs("SMOKE_WRITE_LATENCY=%d", bus_write_latency_cfg));
@@ -1572,7 +1576,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
       end
 
       magic_word = read_word(MAGIC_ADDR);
-      if ((magic_word == MAGIC_PASS) || (magic_word == MAGIC_ERROR_PASS)) begin
+      if ((magic_word == MAGIC_PASS) || (magic_word == MAGIC_ERROR_PASS) ||
+          (magic_word == MAGIC_WOTS_ERROR_PASS)) begin
         logic [31:0] cases_passed;
         logic [31:0] cases_failed;
         logic [31:0] status_poll_count;
@@ -1588,6 +1593,13 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
 	          $fatal(1, "PASS magic observed before expected case count cases_passed=%0d expected=%0d",
 	                 cases_passed, expected_case_count_cfg);
 	        end
+        if ((magic_word == MAGIC_WOTS_ERROR_PASS) &&
+            (!wots_chain_error_smoke_cfg ||
+             (error_cases_passed != 32'(WOTS_ERROR_EXPECTED_CASES)))) begin
+          $fatal(1, "WOTS error PASS magic mismatch plusarg=%0d passed=%0d expected=%0d",
+                 wots_chain_error_smoke_cfg, error_cases_passed,
+                 WOTS_ERROR_EXPECTED_CASES);
+        end
         if (xif_accept_count_q < 8) begin
           $fatal(1, "PASS magic observed before expected XIF traffic count=%0d",
                  xif_accept_count_q);
@@ -1631,8 +1643,17 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
           print_xif_latency_summary();
         end
         if (magic_word == MAGIC_PASS) begin
-          $display("PASS cv32e40x_spx_core_smoke read_latency=%0d write_latency=%0d req_ready_pct=%0d cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
-                   bus_read_latency_cfg, bus_write_latency_cfg, bus_req_ready_pct_cfg,
+          $display("PASS cv32e40x_spx_core_smoke mode=%s read_latency=%0d write_latency=%0d req_ready_pct=%0d cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
+                   smoke_mode_cfg, bus_read_latency_cfg, bus_write_latency_cfg, bus_req_ready_pct_cfg,
+                   cycle_q, instr_fetch_count_q, data_read_count_q, data_write_count_q,
+                   xif_issue_count_q, xif_accept_count_q, xif_result_count_q,
+                   desc_control_count_q, bus_read_count_q, bus_write_count_q,
+                   perf_load_cycles, perf_core_cycles, perf_store_cycles,
+                   perf_total_cycles, cases_passed, cases_failed, status_poll_count,
+                   error_cases_passed);
+        end else if (magic_word == MAGIC_WOTS_ERROR_PASS) begin
+          $display("PASS cv32e40x_spx_wots_chain_error mode=%s read_latency=%0d write_latency=%0d req_ready_pct=%0d cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
+                   smoke_mode_cfg, bus_read_latency_cfg, bus_write_latency_cfg, bus_req_ready_pct_cfg,
                    cycle_q, instr_fetch_count_q, data_read_count_q, data_write_count_q,
                    xif_issue_count_q, xif_accept_count_q, xif_result_count_q,
                    desc_control_count_q, bus_read_count_q, bus_write_count_q,
@@ -1640,8 +1661,8 @@ module tb_cv32e40x_spx_core_smoke import cv32e40x_pkg::*;
                    perf_total_cycles, cases_passed, cases_failed, status_poll_count,
                    error_cases_passed);
         end else begin
-          $display("PASS cv32e40x_spx_core_smoke_error read_latency=%0d write_latency=%0d req_ready_pct=%0d cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
-                   bus_read_latency_cfg, bus_write_latency_cfg, bus_req_ready_pct_cfg,
+          $display("PASS cv32e40x_spx_core_smoke_error mode=%s read_latency=%0d write_latency=%0d req_ready_pct=%0d cycles=%0d instr_fetch=%0d data_rd=%0d data_wr=%0d xif_issue=%0d xif_accept=%0d xif_result=%0d desc_ctrl=%0d bus_rd=%0d bus_wr=%0d perf_load=%0d perf_core=%0d perf_store=%0d perf_total=%0d cases_passed=%0d cases_failed=%0d status_poll_count=%0d error_cases_passed=%0d",
+                   smoke_mode_cfg, bus_read_latency_cfg, bus_write_latency_cfg, bus_req_ready_pct_cfg,
                    cycle_q, instr_fetch_count_q, data_read_count_q, data_write_count_q,
                    xif_issue_count_q, xif_accept_count_q, xif_result_count_q,
                    desc_control_count_q, bus_read_count_q, bus_write_count_q,

@@ -111,17 +111,21 @@ WOTS_SMOKE_ELF := $(BUILD_DIR)/spx_cvxif_wots_chain_smoke.elf
 WOTS_SMOKE_DUMP := $(BUILD_DIR)/spx_cvxif_wots_chain_smoke.dump
 WOTS_SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_wots_chain_smoke.hex
 WOTS_SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_wots_chain_smoke.gcc.txt
+WOTS_ERROR_SMOKE_ELF := $(BUILD_DIR)/spx_cvxif_wots_chain_error_smoke.elf
+WOTS_ERROR_SMOKE_DUMP := $(BUILD_DIR)/spx_cvxif_wots_chain_error_smoke.dump
+WOTS_ERROR_SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_wots_chain_error_smoke.hex
+WOTS_ERROR_SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_wots_chain_error_smoke.gcc.txt
 ERROR_SMOKE_ELF := $(BUILD_DIR)/spx_cvxif_error_smoke.elf
 ERROR_SMOKE_DUMP := $(BUILD_DIR)/spx_cvxif_error_smoke.dump
 ERROR_SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_error_smoke.hex
 ERROR_SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_error_smoke.gcc.txt
 CV32E40X_SMOKE_BIN := $(BUILD_DIR)/obj_cv32e40x_spx_core_smoke/tb_cv32e40x_spx_core_smoke
 
-.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-wots-chain-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-wots-chain-smoke sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-perf sim-cv32e40x-core-smoke-error clean distclean
+.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-wots-chain-smoke build-cv32e40x-wots-chain-error-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-wots-chain-smoke sim-cv32e40x-wots-chain-smoke-wait1 sim-cv32e40x-wots-chain-smoke-wait2 sim-cv32e40x-wots-chain-smoke-split sim-cv32e40x-wots-chain-smoke-random50 sim-cv32e40x-wots-chain-smoke-random75 sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-perf sim-cv32e40x-core-smoke-error clean distclean
 
 all: test
 
-test: sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress sim-cv32e40x-wots-chain-smoke
+test: sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error
 
 lint:
 	../scripts/lint_rtl.sh
@@ -155,6 +159,12 @@ $(WOTS_SMOKE_ELF): ../sw/tests/spx_cvxif_wots_chain_smoke.c ../sw/tests/spx_cvxi
 		-o $@ ../sw/tests/spx_cvxif_wots_chain_smoke.c
 	$(RISCV_GCC) --version > $(WOTS_SMOKE_GCC_VERSION)
 
+$(WOTS_ERROR_SMOKE_ELF): ../sw/tests/spx_cvxif_wots_chain_error_smoke.c ../sw/tests/spx_cvxif_smoke.ld | $(BUILD_DIR) check-riscv-gcc
+	$(RISCV_GCC) $(RISCV_CFLAGS) $(RISCV_LDFLAGS) \
+		-Wl,-Map=$(BUILD_DIR)/spx_cvxif_wots_chain_error_smoke.map \
+		-o $@ ../sw/tests/spx_cvxif_wots_chain_error_smoke.c
+	$(RISCV_GCC) --version > $(WOTS_ERROR_SMOKE_GCC_VERSION)
+
 $(ERROR_SMOKE_ELF): ../sw/tests/spx_cvxif_error_smoke.c ../sw/tests/spx_cvxif_smoke.ld | $(BUILD_DIR) check-riscv-gcc
 	$(RISCV_GCC) $(RISCV_CFLAGS) $(RISCV_LDFLAGS) \
 		-Wl,-Map=$(BUILD_DIR)/spx_cvxif_error_smoke.map \
@@ -167,6 +177,9 @@ $(SMOKE_DUMP): $(SMOKE_ELF)
 $(WOTS_SMOKE_DUMP): $(WOTS_SMOKE_ELF)
 	$(RISCV_OBJDUMP) -d -s $< > $@
 
+$(WOTS_ERROR_SMOKE_DUMP): $(WOTS_ERROR_SMOKE_ELF)
+	$(RISCV_OBJDUMP) -d -s $< > $@
+
 $(ERROR_SMOKE_DUMP): $(ERROR_SMOKE_ELF)
 	$(RISCV_OBJDUMP) -d -s $< > $@
 
@@ -174,6 +187,9 @@ $(SMOKE_HEX): $(SMOKE_ELF)
 	$(RISCV_OBJCOPY) -O verilog $< $@
 
 $(WOTS_SMOKE_HEX): $(WOTS_SMOKE_ELF)
+	$(RISCV_OBJCOPY) -O verilog $< $@
+
+$(WOTS_ERROR_SMOKE_HEX): $(WOTS_ERROR_SMOKE_ELF)
 	$(RISCV_OBJCOPY) -O verilog $< $@
 
 $(ERROR_SMOKE_HEX): $(ERROR_SMOKE_ELF)
@@ -188,6 +204,11 @@ build-cv32e40x-wots-chain-smoke: $(WOTS_SMOKE_ELF) $(WOTS_SMOKE_DUMP) $(WOTS_SMO
 	@echo "Built $(WOTS_SMOKE_ELF)"
 	@echo "Built $(WOTS_SMOKE_DUMP)"
 	@echo "Built $(WOTS_SMOKE_HEX)"
+
+build-cv32e40x-wots-chain-error-smoke: $(WOTS_ERROR_SMOKE_ELF) $(WOTS_ERROR_SMOKE_DUMP) $(WOTS_ERROR_SMOKE_HEX)
+	@echo "Built $(WOTS_ERROR_SMOKE_ELF)"
+	@echo "Built $(WOTS_ERROR_SMOKE_DUMP)"
+	@echo "Built $(WOTS_ERROR_SMOKE_HEX)"
 
 build-cv32e40x-error-smoke: $(ERROR_SMOKE_ELF) $(ERROR_SMOKE_DUMP) $(ERROR_SMOKE_HEX)
 	@echo "Built $(ERROR_SMOKE_ELF)"
@@ -386,7 +407,47 @@ sim-cv32e40x-wots-chain-smoke: build-cv32e40x-wots-chain-smoke vectors build-cv3
 		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
 		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
 		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=100 \
-		+SMOKE_MODE=wots_chain_zero_wait
+		+SMOKE_MODE=zero_wait
+
+sim-cv32e40x-wots-chain-smoke-wait1: build-cv32e40x-wots-chain-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+WOTS_CHAIN_SMOKE \
+		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
+		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+SMOKE_READ_LATENCY=1 +SMOKE_WRITE_LATENCY=1 +SMOKE_REQ_READY_PCT=100 \
+		+SMOKE_MODE=wait1
+
+sim-cv32e40x-wots-chain-smoke-wait2: build-cv32e40x-wots-chain-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+WOTS_CHAIN_SMOKE \
+		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
+		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+SMOKE_READ_LATENCY=2 +SMOKE_WRITE_LATENCY=2 +SMOKE_REQ_READY_PCT=100 \
+		+SMOKE_MODE=wait2
+
+sim-cv32e40x-wots-chain-smoke-split: build-cv32e40x-wots-chain-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+WOTS_CHAIN_SMOKE \
+		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
+		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+SMOKE_READ_LATENCY=2 +SMOKE_WRITE_LATENCY=4 +SMOKE_REQ_READY_PCT=100 \
+		+SMOKE_MODE=split_read2_write4
+
+sim-cv32e40x-wots-chain-smoke-random50: build-cv32e40x-wots-chain-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+WOTS_CHAIN_SMOKE \
+		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
+		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=50 \
+		+SMOKE_MODE=random_ready50
+
+sim-cv32e40x-wots-chain-smoke-random75: build-cv32e40x-wots-chain-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+WOTS_CHAIN_SMOKE \
+		+SMOKE_HEX=$(WOTS_SMOKE_HEX) \
+		+WOTS_VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex \
+		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=75 \
+		+SMOKE_MODE=random_ready75
 
 sim-cv32e40x-core-smoke-wait1: build-cv32e40x-smoke vectors build-cv32e40x-core-smoke-sim
 	./$(CV32E40X_SMOKE_BIN) \
@@ -442,7 +503,16 @@ sim-cv32e40x-core-smoke-error: build-cv32e40x-error-smoke vectors build-cv32e40x
 		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=100 \
 		+SMOKE_MODE=error
 
+sim-cv32e40x-wots-chain-error: build-cv32e40x-wots-chain-error-smoke vectors build-cv32e40x-core-smoke-sim
+	./$(CV32E40X_SMOKE_BIN) \
+		+WOTS_CHAIN_ERROR_SMOKE \
+		+SMOKE_HEX=$(WOTS_ERROR_SMOKE_HEX) \
+		+SMOKE_READ_LATENCY=0 +SMOKE_WRITE_LATENCY=0 +SMOKE_REQ_READY_PCT=100 \
+		+SMOKE_MODE=wots_chain_error
+
 sim-cv32e40x-core-smoke-regress: sim-cv32e40x-core-smoke sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-error
+
+sim-cv32e40x-wots-chain-smoke-regress: sim-cv32e40x-wots-chain-smoke sim-cv32e40x-wots-chain-smoke-wait1 sim-cv32e40x-wots-chain-smoke-wait2 sim-cv32e40x-wots-chain-smoke-split sim-cv32e40x-wots-chain-smoke-random50 sim-cv32e40x-wots-chain-smoke-random75
 
 sim-cv32e40x-core-perf: sim-cv32e40x-core-smoke
 
