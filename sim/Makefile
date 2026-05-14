@@ -4,6 +4,16 @@ VERILATOR ?= verilator
 BUILD_DIR := build
 VECTOR_DIR := vectors
 
+RISCV_GCC_CANDIDATES := riscv32-corev-elf-gcc riscv32-unknown-elf-gcc riscv64-unknown-elf-gcc
+RISCV_GCC := $(firstword $(foreach tool,$(RISCV_GCC_CANDIDATES),$(shell command -v $(tool) 2>/dev/null)))
+RISCV_GCC_NAME := $(notdir $(RISCV_GCC))
+RISCV_TOOL_PREFIX := $(RISCV_GCC_NAME:%-gcc=%)
+RISCV_OBJDUMP := $(RISCV_TOOL_PREFIX)-objdump
+RISCV_OBJCOPY := $(RISCV_TOOL_PREFIX)-objcopy
+RISCV_CFLAGS := -march=rv32imc -mabi=ilp32 -nostdlib -nostartfiles \
+	-ffreestanding -fno-builtin -msmall-data-limit=0 -O2 -Wall -Wextra
+RISCV_LDFLAGS := -T ../sw/tests/spx_cvxif_smoke.ld -Wl,--build-id=none
+
 RTL_PKG := ../rtl/common/spx_thashx4_pkg.sv
 RTL_KECCAK := \
 	../rtl/core/spx_keccak_round.sv \
@@ -33,10 +43,69 @@ RTL_CVXIF_REAL_ADAPTER := \
 	../rtl/cvxif/spx_cvxif_real_adapter.sv \
 	$(RTL_CVXIF_DESC_ADAPTER) \
 	$(RTL_MEM_MASTER_SHIM)
+RTL_CVXIF_REAL_ADAPTER_NO_XIF := \
+	../rtl/cvxif/spx_cvxif_real_adapter.sv \
+	$(RTL_CVXIF_DESC_ADAPTER) \
+	$(RTL_MEM_MASTER_SHIM)
+
+CV32E40X_RTL_DIR := ../third_party/cv32e40x/rtl
+CV32E40X_BHV_DIR := ../third_party/cv32e40x/bhv
+CV32E40X_INC := +incdir+$(CV32E40X_RTL_DIR)/include
+CV32E40X_CORE_RTL := \
+	$(CV32E40X_RTL_DIR)/include/cv32e40x_pkg.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_if_c_obi.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_if_xif.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_align_check.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_if_stage.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_csr.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_debug_triggers.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_cs_registers.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_register_file.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_register_file_wrapper.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_write_buffer.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_lsu_response_filter.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_load_store_unit.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_id_stage.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_i_decoder.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_m_decoder.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_a_decoder.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_b_decoder.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_decoder.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_compressed_decoder.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_sequencer.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_alignment_buffer.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_prefetch_unit.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_mult.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_int_controller.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_clic_int_controller.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_ex_stage.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_wb_stage.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_div.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_alu.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_ff_one.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_popcnt.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_alu_b_cpop.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_controller_fsm.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_controller_bypass.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_controller.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_instr_obi_interface.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_data_obi_interface.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_prefetcher.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_sleep_unit.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_core.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_mpu.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_pma.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_pc_target.sv \
+	$(CV32E40X_RTL_DIR)/cv32e40x_wpt.sv \
+	$(CV32E40X_BHV_DIR)/cv32e40x_sim_clock_gate.sv
 
 GEN := $(BUILD_DIR)/gen_thashx4_vectors
+SMOKE_ELF := $(BUILD_DIR)/spx_cvxif_smoke.elf
+SMOKE_DUMP := $(BUILD_DIR)/spx_cvxif_smoke.dump
+SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_smoke.hex
+SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_smoke.gcc.txt
 
-.PHONY: all test vectors lint lint-spx-cvxif sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter clean distclean
+.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke clean distclean
 
 all: test
 
@@ -54,6 +123,30 @@ lint-spx-cvxif:
 
 $(BUILD_DIR):
 	mkdir -p $@
+
+check-riscv-gcc:
+	@test -n "$(RISCV_GCC)" || { \
+		echo "No RISC-V GCC found. Tried: $(RISCV_GCC_CANDIDATES)"; \
+		exit 1; \
+	}
+	@echo "Using RISC-V GCC: $(RISCV_GCC_NAME)"
+
+$(SMOKE_ELF): ../sw/tests/spx_cvxif_smoke.c ../sw/tests/spx_cvxif_smoke.ld | $(BUILD_DIR) check-riscv-gcc
+	$(RISCV_GCC) $(RISCV_CFLAGS) $(RISCV_LDFLAGS) \
+		-Wl,-Map=$(BUILD_DIR)/spx_cvxif_smoke.map \
+		-o $@ ../sw/tests/spx_cvxif_smoke.c
+	$(RISCV_GCC) --version > $(SMOKE_GCC_VERSION)
+
+$(SMOKE_DUMP): $(SMOKE_ELF)
+	$(RISCV_OBJDUMP) -d -s $< > $@
+
+$(SMOKE_HEX): $(SMOKE_ELF)
+	$(RISCV_OBJCOPY) -O verilog $< $@
+
+build-cv32e40x-smoke: $(SMOKE_ELF) $(SMOKE_DUMP) $(SMOKE_HEX)
+	@echo "Built $(SMOKE_ELF)"
+	@echo "Built $(SMOKE_DUMP)"
+	@echo "Built $(SMOKE_HEX)"
 
 $(GEN): gen_thashx4_vectors.c ../sw/spx_model/keccakx4.c ../sw/spx_model/keccakx4.h | $(BUILD_DIR)
 	$(CC) -std=c99 -Wall -Wextra -O2 -I../sw/spx_model \
@@ -199,6 +292,17 @@ sim-cvxif-real-adapter: vectors
 		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
 		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
 		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
+
+sim-cv32e40x-core-smoke: build-cv32e40x-smoke
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		$(CV32E40X_INC) \
+		--top-module tb_cv32e40x_spx_core_smoke \
+		-Mdir $(BUILD_DIR)/obj_cv32e40x_spx_core_smoke \
+		-o tb_cv32e40x_spx_core_smoke \
+		$(RTL_PKG) $(CV32E40X_CORE_RTL) $(RTL_CVXIF_REAL_ADAPTER_NO_XIF) \
+		tb/tb_cv32e40x_spx_core_smoke.sv
+	./$(BUILD_DIR)/obj_cv32e40x_spx_core_smoke/tb_cv32e40x_spx_core_smoke \
+		+SMOKE_HEX=$(SMOKE_HEX)
 
 clean:
 	rm -rf $(BUILD_DIR)
