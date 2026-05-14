@@ -31,9 +31,8 @@ make -C synth/fpga synth-descriptor-adapter-2w PART=xc7a35tcpg236-1 CLOCK_PERIOD
 make -C synth/fpga synth-descriptor-adapter-1w PART=xc7a35tcpg236-1 CLOCK_PERIOD_NS=10.0
 ```
 
-The Linux environment used for this update has Verilator and the RISC-V GCC
-toolchain, but no `vivado` executable. The PPA flow is wired, but the actual
-LUT/FF/timing refresh must be run on the Windows Vivado host.
+The final PPA refresh was run on the Windows Vivado host. The Windows shell did
+not have `make`, so the equivalent batch wrapper was used.
 
 ## Wait-State Results
 
@@ -177,14 +176,14 @@ includes:
 - op-type mux/control;
 - shared descriptor memory load/store and status writeback logic.
 
-Current local status:
+Windows Vivado host status:
 
 | Top/config | LUT | FF | BRAM | DSP | WNS | Fmax | delta vs Phase3.3 descriptor_4w |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | Phase 3.3 `descriptor_4w` baseline | 14801 | 11870 | 0 | 0 | 0.323 ns | 103.34 MHz | baseline |
-| Phase 4.2 `spx_descriptor_adapter`, `MEM_WORDS_PER_CYCLE=4` | TBD | TBD | TBD | TBD | TBD | TBD | TBD, requires Windows Vivado host run |
-| Phase 4.2 `spx_descriptor_adapter`, `MEM_WORDS_PER_CYCLE=2` | TBD | TBD | TBD | TBD | TBD | TBD | optional host run |
-| Phase 4.2 `spx_descriptor_adapter`, `MEM_WORDS_PER_CYCLE=1` | TBD | TBD | TBD | TBD | TBD | TBD | optional host run |
+| Phase 4.2 `spx_descriptor_adapter`, `MEM_WORDS_PER_CYCLE=4` | 28412 | 22657 | 0 | 0 | N/A, placement failed | N/A, placement failed | +13611 LUT (+91.96%), +10787 FF (+90.88%), Fmax N/A |
+| Phase 4.2 `spx_descriptor_adapter`, `MEM_WORDS_PER_CYCLE=2` | 27156 | 22628 | 0 | 0 | N/A, placement failed | N/A, placement failed | +12355 LUT (+83.47%), +10758 FF (+90.63%), Fmax N/A |
+| Phase 4.2 `spx_descriptor_adapter`, `MEM_WORDS_PER_CYCLE=1` | 27173 | 22634 | 0 | 0 | N/A, placement failed | N/A, placement failed | +12372 LUT (+83.59%), +10764 FF (+90.68%), Fmax N/A |
 
 The required host command for the main comparison is:
 
@@ -192,24 +191,87 @@ The required host command for the main comparison is:
 make -C synth/fpga synth-descriptor-adapter-4w PART=xc7a35tcpg236-1 CLOCK_PERIOD_NS=10.0
 ```
 
-Expected summary file after the host run:
+On this Windows host, `make` was unavailable, so the equivalent command was:
 
 ```text
-synth/fpga/build/spx_descriptor_adapter_4w/reports/ppa_summary.txt
+cd synth\fpga
+run_vivado_descriptor.bat spx_descriptor_adapter xc7a35tcpg236-1 10.0 4
 ```
+
+The fresh 4w run reached `synth_design` and `opt_design`, then failed before
+placement with Vivado DRC `UTLZ-1`: the design requires 28412 Slice LUTs, while
+`xc7a35tcpg236-1` provides 20800 compatible sites. Because `place_design` did
+not run, no fresh placed/routed `ppa_summary.txt`, `utilization.rpt`, or
+`timing_summary.rpt` was emitted for Phase 4.2. Existing files under
+`synth/fpga/build/spx_descriptor_adapter_4w/reports/` are older stale artifacts
+from 2026-05-13 and must not be used as the WOTS-inclusive refresh result.
+
+## Vivado Host PPA Result
+
+Vivado command:
+
+```text
+cd synth\fpga
+run_vivado_descriptor.bat spx_descriptor_adapter xc7a35tcpg236-1 10.0 4
+```
+
+Run details:
+
+| Item | Value |
+| --- | --- |
+| Vivado | 2020.2 |
+| FPGA part | `xc7a35tcpg236-1` |
+| Target clock | 10.0 ns |
+| Top/config | `spx_descriptor_adapter`, `MEM_WORDS_PER_CYCLE=4` |
+| Included paths | `THASHX4` and `WOTS_CHAINX4` |
+| Flow mode | OOC accelerator-only synthesis/implementation |
+
+Fresh 4w result:
+
+| Metric | Value |
+| --- | ---: |
+| LUT | 28412 |
+| FF | 22657 |
+| BRAM | 0 |
+| DSP | 0 |
+| WNS | N/A, placement failed |
+| Critical path delay | N/A, placement failed |
+| Fmax | N/A, placement failed |
+| Timing met | No, placement failed before timing |
+
+Delta versus Phase 3.3 `descriptor_4w` baseline:
+
+| Metric | Phase 3.3 baseline | Phase 4.2 4w | Delta |
+| --- | ---: | ---: | ---: |
+| LUT | 14801 | 28412 | +13611 (+91.96%) |
+| FF | 11870 | 22657 | +10787 (+90.88%) |
+| Fmax | 103.34 MHz | N/A | N/A, no routed timing |
+
+Optional width sweep:
+
+| Width | Result |
+| --- | --- |
+| `MEM_WORDS_PER_CYCLE=2` | Placement DRC failed: 27156 Slice LUTs required, 20800 available |
+| `MEM_WORDS_PER_CYCLE=1` | Placement DRC failed: 27173 Slice LUTs required, 20800 available |
+
+PPA verdict for `xc7a35tcpg236-1`: FAIL. The WOTS-inclusive descriptor adapter
+does not fit the selected Artix-7 target, even before SoC, AXI, AHB, APB,
+X-HEEP, or full WOTS public-key integration.
 
 ## Recommendation
 
-Phase 4.2 is worth carrying into Phase 4.3, with one condition: refresh the
-descriptor adapter PPA on the Vivado host first. Functionally, the WOTS path is
-now hardened across fixed wait states, split read/write latency, deterministic
-random backpressure, and the WOTS-specific error cases.
+Phase 4.2 is functionally worth carrying into Phase 4.3, but the current
+WOTS-inclusive descriptor adapter PPA does not pass for `xc7a35tcpg236-1`.
+Functionally, the WOTS path is now hardened across fixed wait states, split
+read/write latency, deterministic random backpressure, and the WOTS-specific
+error cases.
 
 The performance case is strongest for medium and long chains. `num_steps=15`
 improves from 1.90x in zero-wait mode to 3.32x under split read2/write4 when
 compared against descriptor-at-a-time scheduling in the same memory mode.
 
-Phase 4.3 should focus on lane divergence and mixed-length WOTS verify chains,
-not on a full WOTS public-key engine yet. The current fixed-length
-`WOTS_CHAINX4` path has earned the next experiment; the missing question is how
-much of that benefit survives when verification chain lengths diverge by lane.
+Phase 4.3 can proceed as a microarchitectural experiment for lane divergence and
+mixed-length WOTS verify chains, not as a commit to this exact Artix-7 area
+point. The next phase should keep area pressure explicit: either target a larger
+FPGA for WOTS-inclusive 4w PPA, or plan an area-reduction pass before promoting
+the descriptor adapter as an `xc7a35tcpg236-1`-fit implementation.
