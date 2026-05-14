@@ -73,6 +73,7 @@ for width in 1 2 4; do
     -GMEM_WORDS_PER_CYCLE="${width}" \
     --top-module spx_descriptor_adapter \
     "${RTL_FILES[@]}" \
+    "${REPO_ROOT}/rtl/core/spx_wots_chainx4_core.sv" \
     "${REPO_ROOT}/rtl/cvxif/spx_descriptor_adapter.sv"
 done
 
