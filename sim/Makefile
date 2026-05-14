@@ -21,6 +21,9 @@ RTL_KECCAK := \
 RTL_THASH := \
 	$(RTL_KECCAK) \
 	../rtl/core/spx_thashx4_core.sv
+RTL_WOTS_CHAIN := \
+	$(RTL_THASH) \
+	../rtl/core/spx_wots_chainx4_core.sv
 RTL_COP_WRAPPER := \
 	$(RTL_THASH) \
 	../rtl/wrapper/spx_cop_wrapper.sv
@@ -110,11 +113,11 @@ ERROR_SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_error_smoke.hex
 ERROR_SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_error_smoke.gcc.txt
 CV32E40X_SMOKE_BIN := $(BUILD_DIR)/obj_cv32e40x_spx_core_smoke/tb_cv32e40x_spx_core_smoke
 
-.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-perf sim-cv32e40x-core-smoke-error clean distclean
+.PHONY: all test vectors lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-perf sim-cv32e40x-core-smoke-error clean distclean
 
 all: test
 
-test: sim-keccakx4 sim-thashx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress
+test: sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress
 
 lint:
 	../scripts/lint_rtl.sh
@@ -170,9 +173,11 @@ build-cv32e40x-error-smoke: $(ERROR_SMOKE_ELF) $(ERROR_SMOKE_DUMP) $(ERROR_SMOKE
 	@echo "Built $(ERROR_SMOKE_DUMP)"
 	@echo "Built $(ERROR_SMOKE_HEX)"
 
-$(GEN): gen_thashx4_vectors.c ../sw/spx_model/keccakx4.c ../sw/spx_model/keccakx4.h | $(BUILD_DIR)
+$(GEN): gen_thashx4_vectors.c ../sw/spx_model/keccakx4.c ../sw/spx_model/keccakx4.h ../sw/spx_model/wots_chainx4_model.c ../sw/spx_model/wots_chainx4_model.h ../sw/spx_model/descriptor_ext_model.c ../sw/spx_model/descriptor_ext_model.h | $(BUILD_DIR)
 	$(CC) -std=c99 -Wall -Wextra -O2 -I../sw/spx_model \
-		-o $@ gen_thashx4_vectors.c ../sw/spx_model/keccakx4.c
+		-o $@ gen_thashx4_vectors.c ../sw/spx_model/keccakx4.c \
+		../sw/spx_model/wots_chainx4_model.c \
+		../sw/spx_model/descriptor_ext_model.c
 
 vectors: $(GEN)
 	mkdir -p $(VECTOR_DIR)
@@ -197,6 +202,15 @@ sim-thashx4: vectors
 		+VECTORS_IB1=$(VECTOR_DIR)/thashx4_inblocks1.hex \
 		+VECTORS_IB2=$(VECTOR_DIR)/thashx4_inblocks2.hex \
 		+EXPECTED=$(VECTOR_DIR)/thashx4_expected.hex
+
+sim-wots-chainx4: vectors
+	$(VERILATOR) -sv --binary --timing -Wno-fatal \
+		--top-module tb_wots_chainx4_core \
+		-Mdir $(BUILD_DIR)/obj_wots_chainx4_core \
+		-o tb_wots_chainx4_core \
+		$(RTL_PKG) $(RTL_WOTS_CHAIN) tb/tb_wots_chainx4_core.sv
+	./$(BUILD_DIR)/obj_wots_chainx4_core/tb_wots_chainx4_core \
+		+VECTORS=$(VECTOR_DIR)/wots_chainx4_vectors.hex
 
 sim-cop-wrapper: vectors
 	$(VERILATOR) -sv --binary --timing -Wno-fatal \
@@ -402,3 +416,4 @@ distclean: clean
 	rm -f $(VECTOR_DIR)/thashx4_inblocks1.hex
 	rm -f $(VECTOR_DIR)/thashx4_inblocks2.hex
 	rm -f $(VECTOR_DIR)/thashx4_expected.hex
+	rm -f $(VECTOR_DIR)/wots_chainx4_vectors.hex

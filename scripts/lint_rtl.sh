@@ -21,6 +21,16 @@ echo "Linting standalone SPHINCS+ thashx4 RTL with ${VERILATOR}"
   --top-module spx_thashx4_core \
   "${RTL_FILES[@]}"
 
+echo "Linting standalone SPHINCS+ WOTS chain x4 scheduler RTL with ${VERILATOR}"
+"${VERILATOR}" \
+  -sv \
+  --lint-only \
+  --timing \
+  --Wall \
+  --top-module spx_wots_chainx4_core \
+  "${RTL_FILES[@]}" \
+  "${REPO_ROOT}/rtl/core/spx_wots_chainx4_core.sv"
+
 echo "Linting standalone SPHINCS+ coprocessor wrapper with ${VERILATOR}"
 "${VERILATOR}" \
   -sv \
