@@ -39,6 +39,8 @@ set report_dir [file join $build_dir reports]
 file mkdir $build_dir
 file mkdir $report_dir
 set xdc_file [file join $build_dir clock.xdc]
+set synth_utilization_report [file join $report_dir synth_utilization.rpt]
+set synth_utilization_hier_report [file join $report_dir synth_utilization_hier.rpt]
 set utilization_report [file join $report_dir utilization.rpt]
 set utilization_hier_report [file join $report_dir utilization_hier.rpt]
 set timing_summary_report [file join $report_dir timing_summary.rpt]
@@ -79,8 +81,10 @@ if {$top eq "spx_cvxif_adapter"} {
 if {$top eq "spx_cvxif_adapter_coarse"} {
   lappend rtl_files [file join $repo_root rtl cvxif spx_cvxif_adapter_coarse.sv]
 }
-if {$top eq "spx_descriptor_adapter"} {
+if {$top in {"spx_wots_chainx4_core" "spx_descriptor_adapter"}} {
   lappend rtl_files [file join $repo_root rtl core spx_wots_chainx4_core.sv]
+}
+if {$top eq "spx_descriptor_adapter"} {
   lappend rtl_files [file join $repo_root rtl cvxif spx_descriptor_adapter.sv]
 }
 
@@ -105,7 +109,14 @@ if {[llength $synth_generics] > 0} {
   synth_design -top $top -part $part -flatten_hierarchy rebuilt -mode out_of_context
 }
 
+report_utilization -file $synth_utilization_report
+report_utilization -hierarchical -file $synth_utilization_hier_report
+
 opt_design
+
+report_utilization -hierarchical -file $utilization_hier_report
+report_utilization -file $utilization_report
+
 place_design
 route_design
 
@@ -150,6 +161,8 @@ if {[llength $timing_paths] > 0} {
   puts $summary_file "critical_delay_ns: unavailable"
   puts $summary_file "estimated_fmax_mhz: unavailable"
 }
+puts $summary_file "synth_utilization_report: $synth_utilization_report"
+puts $summary_file "synth_utilization_hier_report: $synth_utilization_hier_report"
 puts $summary_file "utilization_report: $utilization_report"
 puts $summary_file "utilization_hier_report: $utilization_hier_report"
 puts $summary_file "timing_report: $timing_summary_report"

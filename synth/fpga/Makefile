@@ -4,7 +4,7 @@ PART ?= xc7a35tcpg236-1
 CLOCK_PERIOD_NS ?= 10.0
 MEM_WORDS_PER_CYCLE ?= 1
 
-.PHONY: all synth synth-thashx4 synth-keccakx4 synth-cop-wrapper synth-descriptor-adapter synth-descriptor-adapter-1w synth-descriptor-adapter-2w synth-descriptor-adapter-4w clean
+.PHONY: all synth synth-thashx4 synth-keccakx4 synth-wots-chainx4 synth-cop-wrapper synth-descriptor-adapter synth-descriptor-adapter-1w synth-descriptor-adapter-2w synth-descriptor-adapter-4w clean
 
 all: synth-thashx4
 
@@ -19,6 +19,10 @@ synth-thashx4:
 synth-keccakx4:
 	$(VIVADO) -mode batch -source synth_vivado.tcl \
 		-tclargs spx_keccakx4_core $(PART) $(CLOCK_PERIOD_NS)
+
+synth-wots-chainx4:
+	$(VIVADO) -mode batch -source synth_vivado.tcl \
+		-tclargs spx_wots_chainx4_core $(PART) $(CLOCK_PERIOD_NS)
 
 synth-cop-wrapper:
 	$(VIVADO) -mode batch -source synth_vivado.tcl \
