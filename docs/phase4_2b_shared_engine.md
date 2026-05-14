@@ -123,40 +123,94 @@ controller local state, and small request mux/ready logic. The 4w descriptor is
 therefore expected to move back below the 20800 LUT device capacity, but the
 actual number must be confirmed with Vivado.
 
-## PPA Flow Status
+## Windows Vivado PPA Result
 
-This VM does not have `vivado` on `PATH`, so routed PPA was not run locally.
-The 4w flow command path was checked with `make -n`:
+Windows Vivado 2020.2 was run on May 14, 2026 on the shared-engine
+`spx_descriptor_adapter`, with the same accelerator-only OOC flow used by the
+earlier descriptor PPA runs.
 
-```text
-cd synth/fpga
-vivado -mode batch -source synth_vivado.tcl \
-  -tclargs spx_descriptor_adapter xc7a35tcpg236-1 10.0 4
-```
-
-The synthesis file list still includes:
-
-- `rtl/core/spx_thashx4_core.sv`
-- `rtl/core/spx_wots_chainx4_core.sv`
-- `rtl/cvxif/spx_descriptor_adapter.sv`
-
-## Windows Vivado Next Step
-
-Run the 4w descriptor build on the Windows Vivado host:
+Command:
 
 ```text
 cd synth\fpga
 run_vivado_descriptor.bat spx_descriptor_adapter xc7a35tcpg236-1 10.0 4
 ```
 
-Collect:
+Equivalent make target:
+
+```text
+make -C synth/fpga synth-descriptor-adapter-4w PART=xc7a35tcpg236-1 CLOCK_PERIOD_NS=10.0
+```
+
+Build configuration:
+
+| Field | Value |
+| --- | --- |
+| Top | `spx_descriptor_adapter` |
+| Descriptor memory width | `MEM_WORDS_PER_CYCLE=4` |
+| FPGA part | `xc7a35tcpg236-1` |
+| Target clock | 10.0 ns |
+| Flow | Vivado out-of-context accelerator-only synth/place/route |
+
+Generated reports:
 
 - `synth/fpga/build/spx_descriptor_adapter_4w/reports/ppa_summary.txt`
 - `synth/fpga/build/spx_descriptor_adapter_4w/reports/utilization.rpt`
 - `synth/fpga/build/spx_descriptor_adapter_4w/reports/utilization_hier.rpt`
 - `synth/fpga/build/spx_descriptor_adapter_4w/reports/timing_summary.rpt`
 
-The hierarchy check should show only one large
-`spx_descriptor_adapter/u_thashx4_core/u_keccakx4` path. There should be no
-`u_wots_chainx4_core/u_thashx4_core/u_keccakx4` path in the descriptor adapter
-build.
+Measured PPA:
+
+| Metric | Result |
+| --- | ---: |
+| LUT | 17079 |
+| FF | 14049 |
+| BRAM | 0 |
+| DSP | 0 |
+| WNS | 0.712 ns |
+| Critical delay | 9.288 ns |
+| Estimated Fmax | 107.67 MHz |
+
+Vivado placement and routing both completed successfully. The final router
+summary reported 0 failed nets, 0 unrouted nets, 0 partially routed nets, and 0
+node overlaps. DRC completed with 0 errors before implementation steps, and the
+old `UTLZ-1` overutilization DRC did not reappear.
+
+The routed utilization is 17079 / 20800 Slice LUTs, or 82.11% of the
+`xc7a35tcpg236-1` LUT budget, leaving 3721 LUTs of OOC headroom. FF usage is
+14049 / 41600, or 33.77%.
+
+Hierarchy check:
+
+| Hierarchy | LUT | FF | Interpretation |
+| --- | ---: | ---: | --- |
+| `spx_descriptor_adapter` | 17079 | 14049 | Top total |
+| `(spx_descriptor_adapter)` | 1577 | 2764 | Adapter local control/load/store/mux logic |
+| `u_thashx4_core` | 13018 | 9104 | Single shared THASHX4 engine |
+| `u_thashx4_core/u_keccakx4` | 12111 | 6407 | Single KeccakX4 datapath |
+| `u_wots_chainx4_core` | 2488 | 2181 | WOTS controller/local state |
+
+The hierarchy confirms that the descriptor adapter now contains only one large
+`spx_descriptor_adapter/u_thashx4_core/u_keccakx4` path. The old nested
+`spx_descriptor_adapter/u_wots_chainx4_core/u_thashx4_core/u_keccakx4` path is
+absent from the routed hierarchy report, and `spx_wots_chainx4_core` is no
+longer a thash datapath owner in this build.
+
+Comparison against the key 4w builds:
+
+| Build | LUT | FF | Fmax | Result |
+| --- | ---: | ---: | ---: | --- |
+| Phase 3.3 descriptor_4w baseline | 14801 | 11870 | 103.34 MHz | routed |
+| Phase 4.2 non-shared WOTS | 28412 | 22657 | N/A | placement failed, `UTLZ-1` |
+| Phase 4.2B shared-engine WOTS | 17079 | 14049 | 107.67 MHz | routed |
+
+Versus the Phase 3.3 descriptor_4w baseline, the shared-engine WOTS build costs
++2278 LUT and +2179 FF, while keeping routed timing above the 100 MHz target.
+Versus the Phase 4.2 non-shared WOTS build, it removes 11333 LUT and 8608 FF
+and restores place/route on `xc7a35tcpg236-1`.
+
+Phase 4.2C conclusion: the shared-engine descriptor adapter fits the target
+Artix-7 part again. Area is acceptable for the standalone OOC accelerator
+boundary, timing is acceptable at the 10.0 ns target, and Phase 4.3 can proceed
+to lane divergence / mixed-length WOTS verify chains while keeping the same
+single shared KeccakX4 engine assumption.
