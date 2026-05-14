@@ -177,10 +177,101 @@ instead shows unexpectedly large adapter-local logic, then the next pass should
 inspect output muxing, memory packing, and synthesized register replication in
 the descriptor adapter.
 
+## Windows Vivado Hierarchical Utilization
+
+Windows Vivado 2020.2 was run on May 14, 2026 with target
+`xc7a35tcpg236-1` and a 10.0 ns clock. The main failing command was:
+
+```text
+cd synth\fpga
+run_vivado_descriptor.bat spx_descriptor_adapter xc7a35tcpg236-1 10.0 4
+```
+
+Placement failed, but `synth_design` and `opt_design` completed and produced
+the intended reports:
+
+```text
+synth/fpga/build/spx_descriptor_adapter_4w/reports/synth_utilization.rpt
+synth/fpga/build/spx_descriptor_adapter_4w/reports/synth_utilization_hier.rpt
+synth/fpga/build/spx_descriptor_adapter_4w/reports/utilization.rpt
+synth/fpga/build/spx_descriptor_adapter_4w/reports/utilization_hier.rpt
+synth/fpga/build/spx_descriptor_adapter_4w/reports/vivado_descriptor_adapter_4w.log
+```
+
+The failed 4w descriptor adapter post-opt utilization was:
+
+| Block / hierarchy instance | LUT | FF | Notes |
+| --- | ---: | ---: | --- |
+| `spx_descriptor_adapter` | 28412 | 22657 | Top total, 136.60% of 20800 LUTs |
+| `(spx_descriptor_adapter)` | 2013 | 2797 | Adapter-local descriptor/load/store/control logic |
+| `u_thashx4_core` | 12762 | 9108 | Direct `THASHX4` branch |
+| `u_thashx4_core/u_keccakx4` | 12115 | 6407 | Keccak datapath inside direct branch |
+| `u_wots_chainx4_core` | 13637 | 10752 | WOTS branch total |
+| `u_wots_chainx4_core/(local)` | 738 | 2179 | WOTS scheduler/local chain state |
+| `u_wots_chainx4_core/u_thashx4_core` | 12899 | 8573 | Thash branch inside WOTS scheduler |
+| `u_wots_chainx4_core/u_thashx4_core/u_keccakx4` | 11855 | 6407 | Keccak datapath inside WOTS branch |
+
+The hierarchy confirms that the direct `THASHX4` path and the WOTS-internal
+thash path are both physically present. Together the two thash-containing
+branches account for 25661 LUT and 17681 FF, or about 90.3% of total LUT and
+78.0% of total FF. The two Keccak x4 instances alone account for 23970 LUT and
+12814 FF, or about 84.4% of total LUT and 56.6% of total FF. Adapter-local
+logic is only 2013 LUT / 2797 FF, so large descriptor muxing and memory packing
+are secondary, not the primary area driver.
+
+The comparison top runs were:
+
+```text
+cd synth\fpga
+run_vivado.bat spx_keccakx4_core xc7a35tcpg236-1 10.0
+run_vivado.bat spx_thashx4_core xc7a35tcpg236-1 10.0
+run_vivado.bat spx_wots_chainx4_core xc7a35tcpg236-1 10.0
+```
+
+Their routed `ppa_summary.txt` and `utilization_hier.rpt` results were:
+
+| Top | LUT | FF | WNS ns | Est. Fmax MHz | Key hierarchy |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `spx_keccakx4_core` | 13578 | 6415 | 1.187 | 113.47 | Top-level Keccak x4 datapath |
+| `spx_thashx4_core` | 11797 | 9105 | 1.422 | 116.58 | `u_keccakx4`: 11539 LUT / 6407 FF |
+| `spx_wots_chainx4_core` | 12857 | 10752 | 0.844 | 109.22 | `u_thashx4_core`: 12319 LUT / 8573 FF; nested `u_keccakx4`: 11280 LUT / 6407 FF |
+
+Small differences between standalone and adapter-embedded hierarchy numbers
+come from OOC top-port effects and cross-hierarchy optimization, but the shape
+is consistent: each WOTS or thash path is dominated by a Keccak x4 datapath.
+
+The Vivado DRC error was captured in:
+
+```text
+synth/fpga/build/spx_descriptor_adapter_4w/reports/vivado_descriptor_adapter_4w.log
+```
+
+The relevant failure summary is:
+
+```text
+ERROR: [DRC UTLZ-1] Resource utilization: LUT as Logic over-utilized in Top Level Design
+This design requires 28412 LUT as Logic cells but only 20800 compatible sites are available.
+ERROR: [DRC UTLZ-1] Resource utilization: Slice LUTs over-utilized in Top Level Design
+This design requires 28412 Slice LUTs cells but only 20800 compatible sites are available.
+ERROR: [Vivado_Tcl 4-23] Error(s) found during DRC. Placer not run.
+```
+
+Conclusion: Phase 4.2A confirms the VM-side hypothesis. The Phase 4.2
+WOTS-inclusive descriptor adapter area growth is primarily caused by static
+duplication of thashx4/keccakx4 datapaths, not by memory bus width, large muxes,
+or local descriptor control.
+
 ## Next RTL Direction
 
-No RTL restructuring is done in Phase 4.2A. If the Windows reports confirm
-duplication, a later area-reduction phase should evaluate sharing a single
-`spx_thashx4_core` between the direct `THASHX4` operation and the WOTS chain
-scheduler, or moving WOTS chain sequencing outside the descriptor adapter so the
-adapter does not statically contain two Keccak x4 datapaths.
+No RTL restructuring is done in Phase 4.2A. The Windows reports confirm
+duplication, so Phase 4.2B should use a shared-thashx4-engine structure:
+
+- `spx_descriptor_adapter` instantiates only one `spx_thashx4_core`.
+- The direct `THASHX4` descriptor operation drives that shared engine directly.
+- The WOTS scheduler becomes a controller and no longer internally
+  instantiates `spx_thashx4_core`.
+- The WOTS scheduler reuses the shared engine through a request/response
+  interface owned by the descriptor adapter.
+
+That Phase 4.2B work should preserve the descriptor ABI and core semantics, and
+should not include SoC, AXI, AHB, APB, or X-HEEP integration.
