@@ -75,6 +75,18 @@ echo "Linting standalone SPHINCS+ CV-X-IF descriptor-control adapter with ${VERI
   --top-module spx_cvxif_desc_adapter \
   "${REPO_ROOT}/rtl/cvxif/spx_cvxif_desc_adapter.sv"
 
+echo "Linting CV32E40X-facing SPHINCS+ CV-X-IF real adapter with ${VERILATOR}"
+"${VERILATOR}" \
+  -sv \
+  --lint-only \
+  --timing \
+  --Wall \
+  -Wno-UNUSEDPARAM \
+  --top-module tb_spx_cvxif_real_adapter_lint \
+  "${REPO_ROOT}/third_party/cv32e40x/rtl/cv32e40x_if_xif.sv" \
+  "${REPO_ROOT}/rtl/cvxif/spx_cvxif_real_adapter.sv" \
+  "${REPO_ROOT}/sim/tb/tb_spx_cvxif_real_adapter_lint.sv"
+
 echo "Linting standalone SPHINCS+ memory master shim mock with ${VERILATOR}"
 "${VERILATOR}" \
   -sv \
