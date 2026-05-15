@@ -121,12 +121,13 @@ ERROR_SMOKE_HEX := $(BUILD_DIR)/spx_cvxif_error_smoke.hex
 ERROR_SMOKE_GCC_VERSION := $(BUILD_DIR)/spx_cvxif_error_smoke.gcc.txt
 CV32E40X_SMOKE_BIN := $(BUILD_DIR)/obj_cv32e40x_spx_core_smoke/tb_cv32e40x_spx_core_smoke
 WOTS_PK_GROUPING_TEST := $(BUILD_DIR)/test_wots_pk_grouping
+SIGN_SCHEDULE_TEST := $(BUILD_DIR)/test_sign_schedule_model
 
-.PHONY: all test vectors test-wots-pk-grouping lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-wots-chain-smoke build-cv32e40x-wots-chain-error-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chainx4-mixed sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-wots-chain-smoke sim-cv32e40x-wots-chain-smoke-wait1 sim-cv32e40x-wots-chain-smoke-wait2 sim-cv32e40x-wots-chain-smoke-split sim-cv32e40x-wots-chain-smoke-random50 sim-cv32e40x-wots-chain-smoke-random75 sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-perf sim-cv32e40x-core-smoke-error clean distclean
+.PHONY: all test vectors test-wots-pk-grouping test-sign-schedule-model lint lint-spx-cvxif check-riscv-gcc build-cv32e40x-smoke build-cv32e40x-wots-chain-smoke build-cv32e40x-wots-chain-error-smoke build-cv32e40x-error-smoke build-cv32e40x-core-smoke-sim sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chainx4-mixed sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-descriptor-adapter-1w sim-descriptor-adapter-2w sim-descriptor-adapter-4w sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke sim-cv32e40x-wots-chain-smoke sim-cv32e40x-wots-chain-smoke-wait1 sim-cv32e40x-wots-chain-smoke-wait2 sim-cv32e40x-wots-chain-smoke-split sim-cv32e40x-wots-chain-smoke-random50 sim-cv32e40x-wots-chain-smoke-random75 sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error sim-cv32e40x-core-smoke-wait1 sim-cv32e40x-core-smoke-wait2 sim-cv32e40x-core-smoke-split sim-cv32e40x-core-smoke-random50 sim-cv32e40x-core-smoke-random75 sim-cv32e40x-core-smoke-regress sim-cv32e40x-core-perf sim-cv32e40x-core-smoke-error clean distclean
 
 all: test
 
-test: test-wots-pk-grouping sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chainx4-mixed sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error
+test: test-wots-pk-grouping test-sign-schedule-model sim-keccakx4 sim-thashx4 sim-wots-chainx4 sim-wots-chainx4-mixed sim-wots-chain-descriptor sim-cop-wrapper sim-cvxif-adapter sim-cvxif-adapter-coarse sim-descriptor-adapter sim-cvxif-desc-adapter sim-cvxif-desc-adapter-wait sim-mem-master-shim sim-cvxif-real-adapter sim-cv32e40x-core-smoke-regress sim-cv32e40x-wots-chain-smoke-regress sim-cv32e40x-wots-chain-error
 
 lint:
 	../scripts/lint_rtl.sh
@@ -235,6 +236,14 @@ $(WOTS_PK_GROUPING_TEST): ../sw/tests/test_wots_pk_grouping.c ../sw/spx_model/wo
 
 test-wots-pk-grouping: $(WOTS_PK_GROUPING_TEST)
 	./$(WOTS_PK_GROUPING_TEST)
+
+$(SIGN_SCHEDULE_TEST): ../sw/tests/test_sign_schedule_model.c ../sw/spx_model/sign_schedule_model.c ../sw/spx_model/sign_schedule_model.h ../sw/spx_model/wots_pk_grouping_model.h ../sw/spx_model/descriptor_ext_model.h ../sw/spx_model/wots_chainx4_model.h | $(BUILD_DIR)
+	$(CC) -std=c99 -Wall -Wextra -O2 -I../sw/spx_model \
+		-o $@ ../sw/tests/test_sign_schedule_model.c \
+		../sw/spx_model/sign_schedule_model.c
+
+test-sign-schedule-model: $(SIGN_SCHEDULE_TEST)
+	./$(SIGN_SCHEDULE_TEST)
 
 sim-keccakx4: vectors
 	$(VERILATOR) -sv --binary --timing -Wno-fatal \
